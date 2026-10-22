@@ -1,5 +1,4 @@
-# Trigger iOS IPA Build
-name: Build iOS App
+name: Build Release iOS IPA
 
 on:
   push:
@@ -31,19 +30,25 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Build iOS Release App
-        run: flutter build ios --release --no-codesign
+      - name: Build iOS Release IPA Archive
+        run: flutter build ipa --release --no-codesign
 
-      - name: Package Payload to IPA
+      - name: Package Release Payload to IPA
         run: |
           mkdir -p build/ios/ipa/Payload
-          cp -r build/ios/iphoneos/Runner.app build/ios/ipa/Payload/
+          cp -r build/ios/iphoneos/Runner.app build/ios/ipa/Payload/ || cp -r build/ios/archive/Runner.xcarchive/Products/Applications/Runner.app build/ios/ipa/Payload/
           cd build/ios/ipa
-          zip -r Swock.ipa Payload
+          zip -r Swock-Release.ipa Payload
           cd ../../..
 
-      - name: Upload iOS IPA Artifact
+      - name: Upload Release IPA Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Swock-iOS-IPA
-          path: build/ios/ipa/Swock.ipa
+          name: Swock-Release-IPA
+          path: build/ios/ipa/Swock-Release.ipa
+
+      - name: Upload Xcode Release Archive Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Swock-Release-XCArchive
+          path: build/ios/archive/Runner.xcarchive
