@@ -1,4 +1,4 @@
-name: Build Release iOS IPA
+name: Build Unsigned iOS IPA
 
 on:
   push:
@@ -30,25 +30,19 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Build iOS Release IPA Archive
-        run: flutter build ipa --release --no-codesign
+      - name: Build Unsigned iOS App
+        run: flutter build ios --release --no-codesign CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
 
-      - name: Package Release Payload to IPA
+      - name: Package Unsigned Payload to IPA
         run: |
           mkdir -p build/ios/ipa/Payload
-          cp -r build/ios/iphoneos/Runner.app build/ios/ipa/Payload/ || cp -r build/ios/archive/Runner.xcarchive/Products/Applications/Runner.app build/ios/ipa/Payload/
+          cp -r build/ios/iphoneos/Runner.app build/ios/ipa/Payload/
           cd build/ios/ipa
-          zip -r Swock-Release.ipa Payload
+          zip -r Swock-Unsigned.ipa Payload
           cd ../../..
 
-      - name: Upload Release IPA Artifact
+      - name: Upload Unsigned IPA Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Swock-Release-IPA
-          path: build/ios/ipa/Swock-Release.ipa
-
-      - name: Upload Xcode Release Archive Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: Swock-Release-XCArchive
-          path: build/ios/archive/Runner.xcarchive
+          name: Swock-Unsigned-IPA
+          path: build/ios/ipa/Swock-Unsigned.ipa
