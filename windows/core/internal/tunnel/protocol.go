@@ -303,7 +303,7 @@ func dialTransport(ctx context.Context, p Profile, endpoint net.IP) (net.Conn, e
 	if err != nil {
 		return nil, err
 	}
-	return websocket.NetConn(ctx, ws, websocket.BinaryMessage), nil
+	return newWebSocketStreamConn(ctx, ws), nil
 }
 
 func tlsConfig(serverName string, allowNameMismatch bool) *tls.Config {
