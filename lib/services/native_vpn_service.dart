@@ -28,13 +28,23 @@ class NativeVpnService {
         message: 'The Swock VPN service is missing. Repair or reinstall Swock.',
       );
     }
+    // Keep the Flutter UI unprivileged; elevate only the VPN service that
+    // needs to create the Wintun adapter and configure system routes.
+    final corePathBase64 = base64.encode(utf8.encode(_windowsCorePath));
+    final powershellCommand =
+        "Start-Process -FilePath ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$corePathBase64'))) "
+        "-ArgumentList @('serve','$pid') -Verb RunAs -WindowStyle Hidden";
+    final windir = Platform.environment['WINDIR'];
+    final powershell = windir == null
+        ? 'powershell.exe'
+        : '$windir\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
     _windowsCoreServer = await Process.start(
-      _windowsCorePath,
-      <String>['serve', '$pid'],
+      powershell,
+      <String>['-NoProfile', '-NonInteractive', '-Command', powershellCommand],
       mode: ProcessStartMode.detached,
       runInShell: false,
     );
-    for (var attempt = 0; attempt < 20; attempt++) {
+    for (var attempt = 0; attempt < 300; attempt++) {
       try {
         await _windowsRequest('status');
         return;
