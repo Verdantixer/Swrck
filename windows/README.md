@@ -2,7 +2,7 @@
 
 The Windows client uses the app's native SWK2 VPN protocol over TCP, TLS, WebSocket, or WebSocket TLS transports. It routes IPv4 traffic through a Wintun adapter and blocks IPv6 traffic while connected. Legacy SWK1 and other profile protocols are not supported by this Windows tunnel.
 
-The app must run as administrator so it can create the adapter, update routes, and enable IPv6 leak protection. Windows asks for elevation when Swock starts. The installer adds an uninstall entry and removes stale Swock routes and its adapter when uninstalling.
+The app UI runs normally. Windows asks for administrator approval when you connect, because the VPN service needs permission to create the adapter, update routes, and enable IPv6 leak protection. The installer adds an uninstall entry and removes stale Swock routes and its adapter when uninstalling.
 
 ## Download a build
 
