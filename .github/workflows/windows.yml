@@ -36,10 +36,12 @@ jobs:
         run: |
           $manifest = 'windows/runner/runner.exe.manifest'
           if (-not (Test-Path $manifest)) { throw "Flutter did not generate $manifest" }
-          $xml = Get-Content $manifest -Raw
-          $xml = $xml -replace 'level="asInvoker"', 'level="requireAdministrator"'
-          Set-Content -Path $manifest -Value $xml -NoNewline
-          if ($xml -notmatch 'level="requireAdministrator"') { throw 'Could not set the Windows elevation manifest.' }
+          $manifestXml = [xml](Get-Content $manifest -Raw)
+          $executionLevel = $manifestXml.SelectSingleNode("//*[local-name()='requestedExecutionLevel']")
+          if ($null -eq $executionLevel) { throw 'Flutter manifest has no requested execution level.' }
+          $executionLevel.SetAttribute('level', 'requireAdministrator')
+          $manifestXml.Save((Resolve-Path $manifest).Path)
+          if ($executionLevel.GetAttribute('level') -ne 'requireAdministrator') { throw 'Could not set the Windows elevation manifest.' }
 
       - name: Install Flutter dependencies
         run: flutter pub get
