@@ -55,23 +55,28 @@ class NativeVpnService {
   }) async {
     final request = <String, dynamic>{'command': command};
     if (profile != null) request['profile'] = profile;
-    final result = await Process.run(
+    final process = await Process.start(
       _windowsCorePath,
       <String>['control'],
       runInShell: false,
-      stdoutEncoding: utf8,
-      stderrEncoding: utf8,
-      input: jsonEncode(request),
     );
-    if (result.exitCode != 0) {
+    process.stdin.encoding = utf8;
+    process.stdin.write(jsonEncode(request));
+    await process.stdin.close();
+    final outputs = await Future.wait<String>(<Future<String>>[
+      process.stdout.transform(utf8.decoder).join(),
+      process.stderr.transform(utf8.decoder).join(),
+    ]);
+    final exitCode = await process.exitCode;
+    if (exitCode != 0) {
       throw PlatformException(
         code: 'windows_vpn_core_error',
-        message: (result.stderr as String).trim().isNotEmpty
-            ? (result.stderr as String).trim()
+        message: outputs[1].trim().isNotEmpty
+            ? outputs[1].trim()
             : 'The Swock VPN service is not available.',
       );
     }
-    final response = jsonDecode(result.stdout as String) as Map<String, dynamic>;
+    final response = jsonDecode(outputs[0]) as Map<String, dynamic>;
     if (response['ok'] != true) {
       throw PlatformException(
         code: 'windows_vpn_error',
@@ -175,3 +180,4 @@ class NativeVpnService {
       ? Future<String?>.value(null)
       : _channel.invokeMethod<String>('getImportUri');
 }
+
