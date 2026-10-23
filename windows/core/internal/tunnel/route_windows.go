@@ -67,8 +67,9 @@ func deleteTunnelAdapter(adapter *wintun.Adapter) error {
 }
 
 func setTunnelAddress(index uint32, address string) error {
-	if err := netsh("interface", "ipv4", "set", "address", "name="+fmt.Sprint(index), "source=static", "address="+address, "mask=255.255.255.255", "gateway=none", "store=active"); err != nil {
-		return fmt.Errorf("could not assign the VPN address: %w", err)
+	script := fmt.Sprintf(`New-NetIPAddress -InterfaceIndex %d -IPAddress '%s' -AddressFamily IPv4 -PrefixLength 32 -PolicyStore ActiveStore -ErrorAction Stop | Out-Null`, index, address)
+	if _, err := powershell(script); err != nil {
+		return fmt.Errorf("could not assign VPN address %s to adapter %d: %w", address, index, err)
 	}
 	return nil
 }
