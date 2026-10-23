@@ -91,8 +91,10 @@ jobs:
             "$env:ChocolateyInstall/lib/innosetup/tools/ISCC.exe"
           ) | Where-Object { Test-Path $_ } | Select-Object -First 1
           if (-not $isccPath) { throw 'Inno Setup compiler was not installed in its expected location.' }
-          New-Item -ItemType Directory -Path 'build/windows/output' -Force | Out-Null
-          & $isccPath '/DBundleDir=build/windows/installer' '/DOutputDir=build/windows/output' 'windows/installer/Swock.iss'
+          $bundleDir = (Resolve-Path 'build/windows/installer').Path
+          $outputDir = Join-Path $PWD 'build/windows/output'
+          New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
+          & $isccPath "/DBundleDir=$bundleDir" "/DOutputDir=$outputDir" 'windows/installer/Swock.iss'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Upload Windows installer
