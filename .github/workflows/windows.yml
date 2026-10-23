@@ -85,10 +85,14 @@ jobs:
         shell: pwsh
         run: |
           choco install innosetup --no-progress -y
-          $iscc = Get-ChildItem 'C:/Program Files (x86)/Inno Setup' -Filter ISCC.exe -Recurse | Select-Object -First 1
-          if (-not $iscc) { throw 'Inno Setup compiler was not installed.' }
+          $isccPath = @(
+            'C:/Program Files (x86)/Inno Setup 6/ISCC.exe',
+            'C:/Program Files/Inno Setup 6/ISCC.exe',
+            "$env:ChocolateyInstall/lib/innosetup/tools/ISCC.exe"
+          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $isccPath) { throw 'Inno Setup compiler was not installed in its expected location.' }
           New-Item -ItemType Directory -Path 'build/windows/output' -Force | Out-Null
-          & $iscc.FullName '/DBundleDir=build/windows/installer' '/DOutputDir=build/windows/output' 'windows/installer/Swock.iss'
+          & $isccPath '/DBundleDir=build/windows/installer' '/DOutputDir=build/windows/output' 'windows/installer/Swock.iss'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Upload Windows installer
