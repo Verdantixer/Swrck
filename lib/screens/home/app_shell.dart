@@ -1642,7 +1642,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
                     padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
                     itemCount: _logs.length,
                     separatorBuilder:
-                        (_, _) => const Divider(color: _line, height: 1),
+                        (context, index) => const Divider(color: _line, height: 1),
                     itemBuilder: (context, index) {
                       final entry = _logs[index];
                       return ListTile(
