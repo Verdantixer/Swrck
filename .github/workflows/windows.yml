@@ -50,6 +50,8 @@ jobs:
           $compatibility = $manifestXml.DocumentElement.SelectSingleNode("*[local-name()='compatibility']")
           if ($null -eq $compatibility) { $manifestXml.DocumentElement.AppendChild($trustInfo) | Out-Null } else { $manifestXml.DocumentElement.InsertBefore($trustInfo, $compatibility) | Out-Null }
           $manifestXml.Save((Resolve-Path $manifest).Path)
+          Write-Host $manifestXml.OuterXml
+          mt.exe -manifest $manifest -validate_manifest
           if ($manifestXml.SelectSingleNode("//*[local-name()='requestedExecutionLevel']").GetAttribute('level') -ne 'requireAdministrator') { throw 'Could not set the Windows elevation manifest.' }
 
       - name: Install Flutter dependencies
