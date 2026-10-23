@@ -31,26 +31,6 @@ jobs:
       - name: Generate Windows Flutter runner
         run: flutter create --platforms=windows --project-name swock .
 
-      - name: Require administrator privileges for VPN routes
-        shell: pwsh
-        run: |
-          $manifest = 'windows/runner/runner.exe.manifest'
-          if (-not (Test-Path $manifest)) { throw "Flutter did not generate $manifest" }
-          $manifestXml = [xml](Get-Content $manifest -Raw)
-          $asmV3 = 'urn:schemas-microsoft-com:asm.v3'
-          $trustInfo = $manifestXml.CreateElement('trustInfo', $asmV3)
-          $security = $manifestXml.CreateElement('security', $asmV3)
-          $privileges = $manifestXml.CreateElement('requestedPrivileges', $asmV3)
-          $executionLevel = $manifestXml.CreateElement('requestedExecutionLevel', $asmV3)
-          $executionLevel.SetAttribute('level', 'requireAdministrator')
-          $executionLevel.SetAttribute('uiAccess', 'false')
-          $privileges.AppendChild($executionLevel) | Out-Null
-          $security.AppendChild($privileges) | Out-Null
-          $trustInfo.AppendChild($security) | Out-Null
-          $application = $manifestXml.DocumentElement.SelectSingleNode("*[local-name()='application']")
-          if ($null -eq $application) { $manifestXml.DocumentElement.AppendChild($trustInfo) | Out-Null } else { $manifestXml.DocumentElement.InsertBefore($trustInfo, $application) | Out-Null }
-          $manifestXml.Save((Resolve-Path $manifest).Path)
-
       - name: Install Flutter dependencies
         run: flutter pub get
 
