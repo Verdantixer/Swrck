@@ -59,7 +59,7 @@ jobs:
         working-directory: windows/core
         run: |
           New-Item -ItemType Directory -Path build -Force | Out-Null
-          go mod download
+          go mod tidy
           $goFiles = Get-ChildItem internal/tunnel -Filter '*.go' | ForEach-Object FullName
           gofmt -w cmd/swock_core/main_windows.go $goFiles
           go build -trimpath -ldflags="-s -w" -o build/swock_core.exe ./cmd/swock_core
