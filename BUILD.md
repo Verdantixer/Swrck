@@ -43,21 +43,15 @@ scripts/build-android.sh split
 - WebSocket profiles use the configured path and optional Host header. Both client and server must point to an endpoint that forwards WebSocket upgrades to the Swock server.
 - The Auto/TCP transport choice is independent from the TLS and WebSocket switches; either or both switches can be enabled.
 
-## Build for iOS
+## Build unsigned iOS IPA with GitHub Actions
 
-Build an unsigned device app when no Apple signing account is available:
+The **Build Unsigned iOS IPA** workflow runs on pushes to `main` or `master`. You can also start it in GitHub under **Actions → Build Unsigned iOS IPA → Run workflow**. Download the `Swock-Unsigned-IPA` artifact from the completed run.
+
+The workflow builds and packages the IPA without an Apple ID, development team, or provisioning profile. To build the unsigned app locally on macOS:
 
 ```bash
 flutter pub get
 flutter build ios --release --no-codesign
 ```
 
-This produces `build/ios/iphoneos/Runner.app`. An IPA made from this unsigned app is an archive for later signing; it cannot be installed on a standard iPhone or iPad as-is. Select an Apple development team in Xcode to sign an app for device testing.
-
-For a signed build, open the CocoaPods workspace (not the `.xcodeproj`):
-
-```bash
-open ios/Runner.xcworkspace
-```
-
-In Xcode, select the **Runner** target, open **Signing & Capabilities**, enable **Automatically manage signing**, choose your Apple ID team, and use a bundle identifier that is unique to your team if Xcode requests one. Then choose a simulator or connected iPhone/iPad and build or run. A free Personal Team is suitable for local development testing; distribution and App Store uploads require the appropriate Apple Developer membership and signing setup.
+The unsigned IPA is a build artifact. Installing it on a standard iPhone or iPad requires signing it first; that signing step is separate from building the IPA.
