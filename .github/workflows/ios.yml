@@ -7,6 +7,9 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build-ios:
     runs-on: macos-latest
@@ -15,33 +18,42 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          channel: 'stable'
+          channel: stable
           cache: true
 
-      - name: Install dependencies
+      - name: Install Flutter dependencies
         run: flutter pub get
 
-      - name: Build Unsigned iOS App
-        run: flutter build ios --release --no-codesign
+      - name: Configure iOS project
+        run: flutter build ios --release --no-codesign --config-only
 
-      - name: Package Unsigned Payload to IPA
+      - name: Build unsigned iOS app
+        run: >-
+          xcodebuild
+          -workspace ios/Runner.xcworkspace
+          -scheme Runner
+          -configuration Release
+          -sdk iphoneos
+          -destination 'generic/platform=iOS'
+          -derivedDataPath build/ios/DerivedData
+          CODE_SIGNING_ALLOWED=NO
+          CODE_SIGNING_REQUIRED=NO
+          CODE_SIGNING_IDENTITY=
+          build
+
+      - name: Package unsigned IPA
         run: |
+          set -euo pipefail
+          app="build/ios/DerivedData/Build/Products/Release-iphoneos/Runner.app"
           mkdir -p build/ios/ipa/Payload
-          cp -r build/ios/iphoneos/Runner.app build/ios/ipa/Payload/
+          ditto "$app" build/ios/ipa/Payload/Runner.app
           cd build/ios/ipa
-          zip -r Swock-Unsigned.ipa Payload
-          cd ../../..
+          /usr/bin/zip -qry Swock-Unsigned.ipa Payload
 
-      - name: Upload Unsigned IPA Artifact
+      - name: Upload unsigned IPA artifact
         uses: actions/upload-artifact@v4
         with:
           name: Swock-Unsigned-IPA
