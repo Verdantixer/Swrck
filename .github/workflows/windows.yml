@@ -1,0 +1,109 @@
+name: Build Swock for Windows
+
+on:
+  push:
+    branches: [main, master, windows-vpn-client]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+
+      - name: Generate Windows Flutter runner
+        run: flutter create --platforms=windows --project-name swock .
+
+      - name: Require administrator privileges for VPN routes
+        shell: pwsh
+        run: |
+          $manifest = 'windows/runner/Runner.exe.manifest'
+          if (-not (Test-Path $manifest)) { throw "Flutter did not generate $manifest" }
+          $xml = Get-Content $manifest -Raw
+          $xml = $xml -replace 'level="asInvoker"', 'level="requireAdministrator"'
+          Set-Content -Path $manifest -Value $xml -NoNewline
+          if ($xml -notmatch 'level="requireAdministrator"') { throw 'Could not set the Windows elevation manifest.' }
+
+      - name: Install Flutter dependencies
+        run: flutter pub get
+
+      - name: Build Windows VPN core
+        working-directory: windows/core
+        run: |
+          New-Item -ItemType Directory -Path build -Force | Out-Null
+          go mod download
+          $goFiles = Get-ChildItem internal/tunnel -Filter '*.go' | ForEach-Object FullName
+          gofmt -w cmd/swock_core/main_windows.go $goFiles
+          go build -trimpath -ldflags="-s -w" -o build/swock_core.exe ./cmd/swock_core
+
+      - name: Download and verify Wintun
+        shell: pwsh
+        run: |
+          $url = 'https://www.wintun.net/builds/wintun-0.14.1.zip'
+          $zip = Join-Path $env:RUNNER_TEMP 'wintun.zip'
+          Invoke-WebRequest -Uri $url -OutFile $zip
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -ne '07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51') {
+            throw "Wintun archive checksum mismatch: $hash"
+          }
+          $target = Join-Path $env:RUNNER_TEMP 'wintun'
+          Expand-Archive -Path $zip -DestinationPath $target -Force
+          $dll = Join-Path $target 'wintun/bin/amd64/wintun.dll'
+          if (-not (Test-Path $dll)) { throw 'The verified Wintun package did not contain the x64 runtime DLL.' }
+          Copy-Item $dll 'windows/core/build/wintun.dll'
+          $license = Get-ChildItem $target -Recurse -File | Where-Object Name -Match '^LICENSE' | Select-Object -First 1
+          if ($license) { Copy-Item $license.FullName 'windows/core/build/ThirdParty-Wintun-LICENSE.txt' }
+
+      - name: Build Flutter Windows release
+        run: flutter build windows --release
+
+      - name: Assemble application bundle
+        shell: pwsh
+        run: |
+          $release = 'build/windows/x64/runner/Release'
+          if (-not (Test-Path $release)) { $release = 'build/windows/runner/Release' }
+          if (-not (Test-Path $release)) { throw 'Flutter Windows release output was not found.' }
+          Copy-Item 'windows/core/build/swock_core.exe' $release
+          Copy-Item 'windows/core/build/wintun.dll' $release
+          if (Test-Path 'windows/core/build/ThirdParty-Wintun-LICENSE.txt') {
+            Copy-Item 'windows/core/build/ThirdParty-Wintun-LICENSE.txt' $release
+          }
+          $appExe = Get-ChildItem $release -Filter '*.exe' | Where-Object Name -ne 'swock_core.exe' | Select-Object -First 1
+          if (-not $appExe) { throw 'Flutter application executable was not found.' }
+          if ($appExe.Name -ne 'Swock.exe') { Rename-Item $appExe.FullName 'Swock.exe' }
+          New-Item -ItemType Directory -Path 'build/windows/installer' -Force | Out-Null
+          Copy-Item "$release/*" 'build/windows/installer/' -Recurse -Force
+
+      - name: Build installable setup and uninstaller
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+          $iscc = Get-ChildItem 'C:/Program Files (x86)/Inno Setup' -Filter ISCC.exe -Recurse | Select-Object -First 1
+          if (-not $iscc) { throw 'Inno Setup compiler was not installed.' }
+          New-Item -ItemType Directory -Path 'build/windows/output' -Force | Out-Null
+          & $iscc.FullName '/DBundleDir=build/windows/installer' '/DOutputDir=build/windows/output' 'windows/installer/Swock.iss'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: Swock-Windows-Installer
+          path: build/windows/output/Swock-Setup.exe
+          if-no-files-found: error
