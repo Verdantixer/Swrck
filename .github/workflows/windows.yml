@@ -37,11 +37,20 @@ jobs:
           $manifest = 'windows/runner/runner.exe.manifest'
           if (-not (Test-Path $manifest)) { throw "Flutter did not generate $manifest" }
           $manifestXml = [xml](Get-Content $manifest -Raw)
-          $executionLevel = $manifestXml.SelectSingleNode("//*[local-name()='requestedExecutionLevel']")
-          if ($null -eq $executionLevel) { throw 'Flutter manifest has no requested execution level.' }
+          $asmV3 = 'urn:schemas-microsoft-com:asm.v3'
+          $trustInfo = $manifestXml.CreateElement('trustInfo', $asmV3)
+          $security = $manifestXml.CreateElement('security', $asmV3)
+          $privileges = $manifestXml.CreateElement('requestedPrivileges', $asmV3)
+          $executionLevel = $manifestXml.CreateElement('requestedExecutionLevel', $asmV3)
           $executionLevel.SetAttribute('level', 'requireAdministrator')
+          $executionLevel.SetAttribute('uiAccess', 'false')
+          $privileges.AppendChild($executionLevel) | Out-Null
+          $security.AppendChild($privileges) | Out-Null
+          $trustInfo.AppendChild($security) | Out-Null
+          $compatibility = $manifestXml.DocumentElement.SelectSingleNode("*[local-name()='compatibility']")
+          if ($null -eq $compatibility) { $manifestXml.DocumentElement.AppendChild($trustInfo) | Out-Null } else { $manifestXml.DocumentElement.InsertBefore($trustInfo, $compatibility) | Out-Null }
           $manifestXml.Save((Resolve-Path $manifest).Path)
-          if ($executionLevel.GetAttribute('level') -ne 'requireAdministrator') { throw 'Could not set the Windows elevation manifest.' }
+          if ($manifestXml.SelectSingleNode("//*[local-name()='requestedExecutionLevel']").GetAttribute('level') -ne 'requireAdministrator') { throw 'Could not set the Windows elevation manifest.' }
 
       - name: Install Flutter dependencies
         run: flutter pub get
