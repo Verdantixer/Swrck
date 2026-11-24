@@ -37,6 +37,25 @@ scripts/build-android.sh split
 ## Notes
 
 - The Android project is configured for the `com.swock.vpn.swock` package namespace.
-- The app is Android-only and follows the real `VpnService` design model.
 - Xray profiles use the bundled Xray-core runtime, native Sing-box JSON profiles use the bundled Sing-box runtime, and SSH profiles use the native SSH full-tunnel implementation.
 - Complete core JSON preserves the protocol features supported by the corresponding bundled core. Xray uses the native tun2socks bridge; Sing-box receives the Android TUN descriptor through libbox.
+- The Windows client currently supports SWK2 profiles over TCP, TLS, WebSocket, and WebSocket TLS. It does not yet support Xray, Sing-box, or SSH profiles.
+
+## Build Windows installer
+
+The **Build Swock for Windows** GitHub Actions workflow runs on pushes to `main`, or can be started from **Actions → Build Swock for Windows → Run workflow**. Download the `Swock-Windows-Installer` artifact from the completed run and run `Swock-Setup.exe`.
+
+For local builds, install Flutter stable, Go 1.23, Visual Studio with the Desktop development with C++ workload, and Inno Setup 6. See [windows/README.md](./windows/README.md) for details.
+
+## Build unsigned iOS IPA with GitHub Actions
+
+The **Build Unsigned iOS IPA** workflow runs on pushes to `main` or `master`. You can also start it in GitHub under **Actions → Build Unsigned iOS IPA → Run workflow**. Download the `Swock-Unsigned-IPA` artifact from the completed run.
+
+The workflow builds and packages the IPA without an Apple ID, development team, or provisioning profile. To build the unsigned app locally on macOS:
+
+```bash
+flutter pub get
+flutter build ios --release --no-codesign
+```
+
+The unsigned IPA is a build artifact. Installing it on a standard iPhone or iPad requires signing it first; that signing step is separate from building the IPA.

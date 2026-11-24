@@ -18,7 +18,7 @@ import NetworkExtension
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
 
-    let messenger = engineBridge.binaryMessenger
+    let messenger = engineBridge.applicationRegistrar.messenger()
     let channel = FlutterMethodChannel(name: "com.swock.vpn/channel", binaryMessenger: messenger)
 
     channel.setMethodCallHandler { [weak self] (call: FlutterMethodCall, result: @escaping FlutterResult) in
