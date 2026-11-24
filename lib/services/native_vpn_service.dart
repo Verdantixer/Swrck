@@ -7,7 +7,7 @@ import 'advanced_settings_service.dart';
 
 class NativeVpnService {
   NativeVpnService({MethodChannel? channel})
-    : _channel = channel ?? const MethodChannel('com.swock.vpn/channel');
+      : _channel = channel ?? const MethodChannel('com.swock.vpn/channel');
 
   final MethodChannel _channel;
 
@@ -46,6 +46,23 @@ class NativeVpnService {
 
   Future<void> clearVpnLogs() => _channel.invokeMethod<void>('clearVpnLogs');
 
+  Future<bool> openExternalUrl(String url) async =>
+      await _channel.invokeMethod<bool>('openExternalUrl', {'url': url}) ??
+      false;
+
   Future<String?> getImportUri() =>
       _channel.invokeMethod<String>('getImportUri');
+
+  Future<String?> importProfileFile() =>
+      _channel.invokeMethod<String>('importProfileFile');
+
+  Future<bool> exportDvsFile({
+    required String fileName,
+    required String contents,
+  }) async =>
+      await _channel.invokeMethod<bool>('exportDvsFile', {
+        'fileName': fileName,
+        'contents': contents,
+      }) ??
+      false;
 }

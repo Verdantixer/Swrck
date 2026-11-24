@@ -2,66 +2,62 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 class AdvancedSettings {
   const AdvancedSettings({
-    this.adaptiveMtu = false,
-    this.packetLossPrevention = false,
     this.callStability = false,
-    this.lowLatency = false,
-    this.stealthObfuscation = false,
+    this.udpGatewayEnabled = false,
+    this.udpGatewayPort = 7200,
+    this.ipv6Enabled = true,
   });
 
-  final bool adaptiveMtu;
-  final bool packetLossPrevention;
   final bool callStability;
-  final bool lowLatency;
-  final bool stealthObfuscation;
+  final bool udpGatewayEnabled;
+  final int udpGatewayPort;
+  final bool ipv6Enabled;
 
   AdvancedSettings copyWith({
-    bool? adaptiveMtu,
-    bool? packetLossPrevention,
     bool? callStability,
-    bool? lowLatency,
-    bool? stealthObfuscation,
-  }) => AdvancedSettings(
-    adaptiveMtu: adaptiveMtu ?? this.adaptiveMtu,
-    packetLossPrevention: packetLossPrevention ?? this.packetLossPrevention,
-    callStability: callStability ?? this.callStability,
-    lowLatency: lowLatency ?? this.lowLatency,
-    stealthObfuscation: stealthObfuscation ?? this.stealthObfuscation,
-  );
+    bool? udpGatewayEnabled,
+    int? udpGatewayPort,
+    bool? ipv6Enabled,
+  }) =>
+      AdvancedSettings(
+        callStability: callStability ?? this.callStability,
+        udpGatewayEnabled: udpGatewayEnabled ?? this.udpGatewayEnabled,
+        udpGatewayPort: udpGatewayPort ?? this.udpGatewayPort,
+        ipv6Enabled: ipv6Enabled ?? this.ipv6Enabled,
+      );
 
-  Map<String, bool> toJson() => {
-    'adaptiveMtu': adaptiveMtu,
-    'packetLossPrevention': packetLossPrevention,
-    'callStability': callStability,
-    'lowLatency': lowLatency,
-    'stealthObfuscation': stealthObfuscation,
-  };
+  Map<String, dynamic> toJson() => {
+        'callStability': callStability,
+        'udpGatewayEnabled': udpGatewayEnabled,
+        'udpGatewayPort': udpGatewayPort,
+        'ipv6Enabled': ipv6Enabled,
+      };
 }
 
 class AdvancedSettingsService {
-  static const _adaptiveMtuKey = 'advanced_adaptive_mtu';
-  static const _packetLossKey = 'advanced_packet_loss_prevention';
   static const _callStabilityKey = 'advanced_call_stability';
-  static const _lowLatencyKey = 'advanced_low_latency';
-  static const _stealthObfuscationKey = 'advanced_stealth_obfuscation';
+  static const _udpGatewayEnabledKey = 'advanced_udp_gateway_enabled';
+  static const _udpGatewayPortKey = 'advanced_udp_gateway_port';
+  static const _ipv6EnabledKey = 'advanced_ipv6_enabled';
 
   Future<AdvancedSettings> load() async {
     final prefs = await SharedPreferences.getInstance();
     return AdvancedSettings(
-      adaptiveMtu: prefs.getBool(_adaptiveMtuKey) ?? false,
-      packetLossPrevention: prefs.getBool(_packetLossKey) ?? false,
       callStability: prefs.getBool(_callStabilityKey) ?? false,
-      lowLatency: prefs.getBool(_lowLatencyKey) ?? false,
-      stealthObfuscation: prefs.getBool(_stealthObfuscationKey) ?? false,
+      udpGatewayEnabled: prefs.getBool(_udpGatewayEnabledKey) ?? false,
+      udpGatewayPort: _validPort(prefs.getInt(_udpGatewayPortKey)),
+      ipv6Enabled: prefs.getBool(_ipv6EnabledKey) ?? true,
     );
   }
 
   Future<void> save(AdvancedSettings settings) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_adaptiveMtuKey, settings.adaptiveMtu);
-    await prefs.setBool(_packetLossKey, settings.packetLossPrevention);
     await prefs.setBool(_callStabilityKey, settings.callStability);
-    await prefs.setBool(_lowLatencyKey, settings.lowLatency);
-    await prefs.setBool(_stealthObfuscationKey, settings.stealthObfuscation);
+    await prefs.setBool(_udpGatewayEnabledKey, settings.udpGatewayEnabled);
+    await prefs.setInt(_udpGatewayPortKey, _validPort(settings.udpGatewayPort));
+    await prefs.setBool(_ipv6EnabledKey, settings.ipv6Enabled);
   }
+
+  static int _validPort(int? value) =>
+      value != null && value >= 1 && value <= 65535 ? value : 7200;
 }

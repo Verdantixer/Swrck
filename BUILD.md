@@ -38,7 +38,5 @@ scripts/build-android.sh split
 
 - The Android project is configured for the `com.swock.vpn.swock` package namespace.
 - The app is Android-only and follows the real `VpnService` design model.
-- The Swock Android client and Go server support raw TCP, WebSocket, TLS, and WebSocket-over-TLS (WSS) transports for the SWK1 tunnel protocol.
-- Enable server-side TLS by providing both `-tls-cert /path/to/fullchain.pem` and `-tls-key /path/to/private.key` to `swock-server`. Android validates the certificate chain and SNI; do not use a self-signed certificate in production.
-- WebSocket profiles use the configured path and optional Host header. Both client and server must point to an endpoint that forwards WebSocket upgrades to the Swock server.
-- The Auto/TCP transport choice is independent from the TLS and WebSocket switches; either or both switches can be enabled.
+- Xray profiles use the bundled Xray-core runtime, native Sing-box JSON profiles use the bundled Sing-box runtime, and SSH profiles use the native SSH full-tunnel implementation.
+- Complete core JSON preserves the protocol features supported by the corresponding bundled core. Xray uses the native tun2socks bridge; Sing-box receives the Android TUN descriptor through libbox.

@@ -2,33 +2,27 @@ package com.swock.vpn.swock.networking
 
 import org.json.JSONObject
 
-/** User-selected performance options; every flag is off unless the profile enables it. */
+/** User-selected options passed to the native VPN engines. */
 data class AdvancedOptions(
-    val adaptiveMtu: Boolean = false,
-    val packetLossPrevention: Boolean = false,
     val callStability: Boolean = false,
-    val lowLatency: Boolean = false,
-    val stealthObfuscation: Boolean = false,
+    val udpGatewayEnabled: Boolean = false,
+    val udpGatewayPort: Int = 7200,
+    val ipv6Enabled: Boolean = true,
 ) {
-    val needsLinkMonitor: Boolean get() = packetLossPrevention || callStability
-
     fun summary(): String = listOfNotNull(
-        "stealth anti-DPI obfuscation".takeIf { stealthObfuscation },
-        "adaptive MTU".takeIf { adaptiveMtu },
-        "packet-loss prevention".takeIf { packetLossPrevention },
         "call stability".takeIf { callStability },
-        "low latency".takeIf { lowLatency },
+        "IPv6 disabled".takeIf { !ipv6Enabled },
     ).joinToString(", ")
 
     companion object {
         fun from(profile: JSONObject): AdvancedOptions {
             val advanced = profile.optJSONObject("advanced") ?: return AdvancedOptions()
             return AdvancedOptions(
-                adaptiveMtu = advanced.optBoolean("adaptiveMtu", false),
-                packetLossPrevention = advanced.optBoolean("packetLossPrevention", false),
                 callStability = advanced.optBoolean("callStability", false),
-                lowLatency = advanced.optBoolean("lowLatency", false),
-                stealthObfuscation = advanced.optBoolean("stealthObfuscation", false),
+                udpGatewayEnabled = advanced.optBoolean("udpGatewayEnabled", false),
+                udpGatewayPort = advanced.optInt("udpGatewayPort", 7200)
+                    .takeIf { it in 1..65535 } ?: 7200,
+                ipv6Enabled = advanced.optBoolean("ipv6Enabled", true),
             )
         }
     }

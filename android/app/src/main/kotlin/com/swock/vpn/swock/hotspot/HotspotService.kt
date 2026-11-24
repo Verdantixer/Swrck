@@ -21,13 +21,14 @@ import android.os.Looper
 import androidx.core.app.NotificationCompat
 import com.swock.vpn.swock.MyVpnService
 import java.io.IOException
+import java.util.Collections
 import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.NetworkInterface
 import java.net.Socket
 
-/** Creates a Wi-Fi Direct access point and shares the active VPN through a local HTTP proxy. */
+/** Creates a Wi-Fi Direct access point and shares the active VPN through proxy or root routing. */
 class HotspotService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     private var manager: WifiP2pManager? = null
@@ -36,7 +37,9 @@ class HotspotService : Service() {
     private var session = 0
     private var requestedSsid = ""
     private var requestedPassword = ""
-    private var requestedPort = DEFAULT_PORT
+    private var requestedPort = AUTO_PORT
+    private var requestedDirect = false
+    private var rootForwarder: RootHotspotForwarder? = null
 
     companion object {
         const val ACTION_START = "com.swock.vpn.swock.hotspot.START"
@@ -44,7 +47,8 @@ class HotspotService : Service() {
         const val EXTRA_NAME = "name"
         const val EXTRA_PASSWORD = "password"
         const val EXTRA_PORT = "port"
-        const val DEFAULT_PORT = 8080
+        const val EXTRA_DIRECT = "direct"
+        const val AUTO_PORT = 0
         private const val NOTIFICATION_ID = 2
         private const val CHANNEL_ID = "swock_hotshare"
         private const val SSID_PREFIX = "DIRECT-sw-"
@@ -59,7 +63,8 @@ class HotspotService : Service() {
             "ssid" to "",
             "password" to "",
             "host" to "",
-            "port" to DEFAULT_PORT,
+            "port" to AUTO_PORT,
+            "mode" to "proxy",
             "clients" to 0,
             "bytes" to 0L,
         )
@@ -88,7 +93,8 @@ class HotspotService : Service() {
         teardown(null)
         requestedSsid = intent.getStringExtra(EXTRA_NAME).orEmpty()
         requestedPassword = intent.getStringExtra(EXTRA_PASSWORD).orEmpty()
-        requestedPort = intent.getIntExtra(EXTRA_PORT, DEFAULT_PORT)
+        requestedPort = intent.getIntExtra(EXTRA_PORT, AUTO_PORT)
+        requestedDirect = intent.getBooleanExtra(EXTRA_DIRECT, false)
         begin()
         return START_NOT_STICKY
     }
@@ -120,7 +126,9 @@ class HotspotService : Service() {
             return "Hotspot name must be 1-22 characters."
         }
         if (requestedPassword.length !in 8..63) return "Password must be 8-63 characters."
-        if (requestedPort !in 1024..65535) return "Port must be between 1024 and 65535."
+        if (requestedPort != AUTO_PORT && requestedPort !in 1024..65535) {
+            return "Port must be automatic or between 1024 and 65535."
+        }
         if (MyVpnService.status()["state"] != "connected") return "Connect the VPN before starting Hotshare."
         return null
     }
@@ -168,7 +176,8 @@ class HotspotService : Service() {
                 if (mySession != session) return@requestConnectionInfo
                 val address = info?.groupOwnerAddress
                 if (info != null && info.groupFormed && info.isGroupOwner && address != null) {
-                    startProxy(mySession, address)
+                    if (requestedDirect) startDirect(mySession, address)
+                    else startProxy(mySession, address)
                 } else if (attempt >= 30) {
                     fail("The hotspot did not start. Try again.")
                 } else {
@@ -186,23 +195,39 @@ class HotspotService : Service() {
         try {
             server.start()
         } catch (error: IOException) {
-            return fail("Proxy port $requestedPort is unavailable: ${error.message}")
+            val portDescription = if (requestedPort == AUTO_PORT) "an available port" else "port $requestedPort"
+            return fail("Could not start the proxy on $portDescription: ${error.message}")
         }
         proxy = server
-        MyVpnService.recordVpnEvent("Hotshare proxy listening on ${address.hostAddress}:$requestedPort")
+        val actualPort = server.localPort
+        MyVpnService.recordVpnEvent("Hotshare proxy listening on ${address.hostAddress}:$actualPort")
         val p2p = manager
         val p2pChannel = channel
         var ssid = SSID_PREFIX + requestedSsid
         var password = requestedPassword
-        publish("running", "Hotshare is on", ssid, password, address.hostAddress.orEmpty())
-        updateNotification("Sharing VPN on ${address.hostAddress}:$requestedPort")
+        publish(
+            "running",
+            "Hotshare is on",
+            ssid,
+            password,
+            address.hostAddress.orEmpty(),
+            port = actualPort,
+        )
+        updateNotification("Sharing VPN on ${address.hostAddress}:$actualPort")
         if (p2p != null && p2pChannel != null) {
             try {
                 p2p.requestGroupInfo(p2pChannel) { group ->
                     if (mySession == session && group != null) {
                         ssid = group.networkName ?: ssid
                         password = group.passphrase ?: password
-                        publish("running", "Hotshare is on", ssid, password, address.hostAddress.orEmpty())
+                        publish(
+                            "running",
+                            "Hotshare is on",
+                            ssid,
+                            password,
+                            address.hostAddress.orEmpty(),
+                            port = actualPort,
+                        )
                     }
                 }
             } catch (_: SecurityException) { }
@@ -210,13 +235,135 @@ class HotspotService : Service() {
         handler.postDelayed({ monitor(mySession) }, 2000)
     }
 
+    private fun startDirect(mySession: Int, address: InetAddress) {
+        publish(
+            "starting",
+            "Setting up root VPN routing…",
+            ssid = SSID_PREFIX + requestedSsid,
+            password = requestedPassword,
+            host = address.hostAddress.orEmpty(),
+            mode = "direct",
+            port = 0,
+        )
+        updateNotification("Setting up root VPN sharing")
+        Thread({
+            var forwarder: RootHotspotForwarder? = null
+            try {
+                val (hotspotInterface, subnet) = awaitHotspotInterface(address)
+                val connectivity = getSystemService(ConnectivityManager::class.java)
+                @Suppress("DEPRECATION")
+                val vpnNetwork = (listOfNotNull(connectivity.activeNetwork) + connectivity.allNetworks.toList())
+                    .firstOrNull { network ->
+                    connectivity.getNetworkCapabilities(network)
+                        ?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+                } ?: throw IOException("The VPN network is unavailable.")
+                val vpnProperties = connectivity.getLinkProperties(vpnNetwork)
+                    ?: throw IOException("The VPN network routes are unavailable.")
+                val vpnInterface = vpnProperties.interfaceName
+                    ?: throw IOException("The VPN interface could not be identified.")
+                val vpnDns = vpnProperties.dnsServers.filterIsInstance<Inet4Address>()
+                    .firstOrNull()?.hostAddress
+                    ?: throw IOException("The VPN has no IPv4 DNS server for shared devices.")
+                val newForwarder = RootHotspotForwarder(
+                    hotspotInterface,
+                    vpnInterface,
+                    subnet,
+                    vpnDns,
+                )
+                forwarder = newForwarder
+                newForwarder.start()
+                val activeForwarder = newForwarder
+                handler.post {
+                    if (mySession != session) {
+                        Thread({ activeForwarder.stop() }, "swock-hotshare-root-stop").start()
+                        return@post
+                    }
+                    rootForwarder = activeForwarder
+                    publish(
+                        "running",
+                        "Hotshare is sharing the VPN directly",
+                        SSID_PREFIX + requestedSsid,
+                        requestedPassword,
+                        address.hostAddress.orEmpty(),
+                        mode = "direct",
+                        port = 0,
+                    )
+                    MyVpnService.recordVpnEvent(
+                        "Hotshare direct routing active: $hotspotInterface to $vpnInterface",
+                    )
+                    updateNotification("Sharing VPN directly via root")
+                    handler.postDelayed({ monitor(mySession) }, 2000)
+                }
+            } catch (error: Exception) {
+                forwarder?.stop()
+                handler.post {
+                    if (mySession == session) {
+                        fail(
+                            "Root VPN sharing failed: " +
+                                (error.message?.takeIf { it.isNotBlank() } ?: error.javaClass.simpleName),
+                        )
+                    }
+                }
+            }
+        }, "swock-hotshare-root-start").start()
+    }
+
+    private fun awaitHotspotInterface(address: InetAddress): Pair<String, String> {
+        val deadline = System.currentTimeMillis() + 10_000
+        while (System.currentTimeMillis() < deadline) {
+            val enumeration = NetworkInterface.getNetworkInterfaces()
+            val interfaces = if (enumeration == null) emptyList() else Collections.list(enumeration)
+            val match = interfaces.asSequence()
+                .filter { it.isUp }
+                .flatMap { networkInterface ->
+                    networkInterface.interfaceAddresses.asSequence()
+                        .filter { it.address == address }
+                        .map { networkInterface to it }
+                }
+                .firstOrNull()
+            if (match != null) {
+                val prefixLength = match.second.networkPrefixLength.toInt()
+                if (prefixLength !in 1..30) {
+                    throw IOException("The Wi-Fi Direct subnet mask is unsupported.")
+                }
+                val ipv4Address = address as? Inet4Address
+                    ?: throw IOException("Root sharing currently requires an IPv4 Wi-Fi Direct address.")
+                return match.first.name to ipv4Subnet(ipv4Address, prefixLength)
+            }
+            try {
+                Thread.sleep(250)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw IOException("Root VPN sharing was interrupted.")
+            }
+        }
+        throw IOException("The Wi-Fi Direct network interface was not found.")
+    }
+
+    private fun ipv4Subnet(address: Inet4Address, prefixLength: Int): String {
+        val value = address.address.fold(0) { result, byte ->
+            (result shl 8) or (byte.toInt() and 0xff)
+        }
+        val mask = -1 shl (32 - prefixLength)
+        val network = value and mask
+        val octets = ByteArray(4) { index ->
+            (network ushr (24 - index * 8)).toByte()
+        }
+        return "${InetAddress.getByAddress(octets).hostAddress}/$prefixLength"
+    }
+
     @SuppressLint("MissingPermission")
     private fun monitor(mySession: Int) {
         if (mySession != session) return
         val vpnState = MyVpnService.status()["state"]
-        if (vpnState == "disconnected") {
-            MyVpnService.recordVpnEvent("Hotshare stopped because the VPN disconnected")
-            stopWithMessage("Hotshare stopped because the VPN disconnected.")
+        if (vpnState == "disconnected" || (requestedDirect && vpnState != "connected")) {
+            val message = if (requestedDirect) {
+                "Hotshare stopped because the VPN disconnected or is reconnecting."
+            } else {
+                "Hotshare stopped because the VPN disconnected."
+            }
+            MyVpnService.recordVpnEvent(message)
+            stopWithMessage(message)
             return
         }
         val p2p = manager
@@ -283,6 +430,15 @@ class HotspotService : Service() {
         handler.removeCallbacksAndMessages(null)
         proxy?.stop()
         proxy = null
+        val oldRootForwarder = rootForwarder
+        rootForwarder = null
+        if (oldRootForwarder != null) {
+            Thread({ oldRootForwarder.stop() }, "swock-hotshare-root-stop").apply {
+                isDaemon = true
+                start()
+            }
+        }
+        requestedDirect = false
         val p2p = manager
         val p2pChannel = channel
         if (p2p != null && p2pChannel != null) {
@@ -300,6 +456,8 @@ class HotspotService : Service() {
         ssid: String = "",
         password: String = "",
         host: String = "",
+        mode: String = "proxy",
+        port: Int = requestedPort,
     ) {
         current = mapOf(
             "state" to state,
@@ -307,7 +465,8 @@ class HotspotService : Service() {
             "ssid" to ssid,
             "password" to password,
             "host" to host,
-            "port" to requestedPort,
+            "port" to port,
+            "mode" to mode,
             "clients" to 0,
             "bytes" to 0L,
         )

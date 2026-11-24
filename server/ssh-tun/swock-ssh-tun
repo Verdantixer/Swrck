@@ -1,0 +1,218 @@
+#!/usr/bin/env python3
+"""Root-only packet relay for the Swock Android SSH full-tunnel client."""
+
+import fcntl
+import ipaddress
+import json
+import os
+import random
+import select
+import shutil
+import signal
+import struct
+import subprocess
+import sys
+
+MAX_FRAME = 65535
+IFF_TUN = 0x0001
+IFF_NO_PI = 0x1000
+TUNSETIFF = 0x400454CA
+
+
+def read_exact(stream, length):
+    chunks = bytearray()
+    while len(chunks) < length:
+        chunk = stream.read(length - len(chunks))
+        if not chunk:
+            return None
+        chunks.extend(chunk)
+    return bytes(chunks)
+
+
+def read_frame(stream):
+    header = read_exact(stream, 4)
+    if header is None:
+        return None
+    length = struct.unpack("!I", header)[0]
+    if length <= 0 or length > MAX_FRAME:
+        raise ValueError("Invalid client frame size")
+    payload = read_exact(stream, length)
+    if payload is None:
+        raise EOFError("Client closed in the middle of a frame")
+    return payload
+
+
+def write_frame(stream, payload):
+    if not payload or len(payload) > MAX_FRAME:
+        raise ValueError("Invalid server frame size")
+    stream.write(struct.pack("!I", len(payload)))
+    stream.write(payload)
+    stream.flush()
+
+
+def run(*args, check=True):
+    return subprocess.run(args, check=check, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+
+def forwarding_enabled(path):
+    try:
+        with open(path, "r", encoding="ascii") as file:
+            return file.read().strip() == "1"
+    except OSError:
+        return False
+
+
+def default_egress():
+    result = run("ip", "-4", "route", "show", "default")
+    for route in result.stdout.splitlines():
+        fields = route.split()
+        try:
+            return fields[fields.index("dev") + 1]
+        except (ValueError, IndexError):
+            continue
+    raise RuntimeError("Could not determine the server's IPv4 internet interface")
+
+
+def create_tun():
+    tun = os.open("/dev/net/tun", os.O_RDWR | os.O_CLOEXEC)
+    name = ("swk%08x" % random.getrandbits(32))[:15].encode("ascii")
+    request = struct.pack("16sH22s", name, IFF_TUN | IFF_NO_PI, b"")
+    try:
+        fcntl.ioctl(tun, TUNSETIFF, request)
+    except Exception:
+        os.close(tun)
+        raise
+    return tun, name.split(b"\0", 1)[0].decode("ascii")
+
+
+def firewall_rules(interface, egress, client4, client6, ipv6_enabled):
+    rules = []
+    add = lambda *args: run(*args)
+    delete = lambda *args: run(*args, check=False)
+    try:
+        v4_forward = ["iptables", "-I", "FORWARD", "1", "-i", interface, "-o", egress, "-s", client4, "-j", "ACCEPT"]
+        add(*v4_forward)
+        rules.append(("iptables", "-D", "FORWARD", *v4_forward[4:]))
+        v4_return = ["iptables", "-I", "FORWARD", "1", "-i", egress, "-o", interface, "-d", client4, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"]
+        add(*v4_return)
+        rules.append(("iptables", "-D", "FORWARD", *v4_return[4:]))
+        v4_nat = ["iptables", "-t", "nat", "-I", "POSTROUTING", "1", "-s", client4, "-o", egress, "-j", "MASQUERADE"]
+        add(*v4_nat)
+        rules.append(("iptables", "-t", "nat", "-D", "POSTROUTING", *v4_nat[6:]))
+
+        if ipv6_enabled:
+            v6_forward = ["ip6tables", "-I", "FORWARD", "1", "-i", interface, "-o", egress, "-s", client6, "-j", "ACCEPT"]
+            add(*v6_forward)
+            rules.append(("ip6tables", "-D", "FORWARD", *v6_forward[4:]))
+            v6_return = ["ip6tables", "-I", "FORWARD", "1", "-i", egress, "-o", interface, "-d", client6, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"]
+            add(*v6_return)
+            rules.append(("ip6tables", "-D", "FORWARD", *v6_return[4:]))
+            v6_nat = ["ip6tables", "-t", "nat", "-I", "POSTROUTING", "1", "-s", client6, "-o", egress, "-j", "MASQUERADE"]
+            add(*v6_nat)
+            rules.append(("ip6tables", "-t", "nat", "-D", "POSTROUTING", *v6_nat[6:]))
+        return rules
+    except Exception:
+        for rule in reversed(rules):
+            delete(*rule)
+        raise
+
+
+def configure_tunnel(control):
+    if os.geteuid() != 0:
+        raise PermissionError("Run swock-ssh-tun with root privileges (sudoers NOPASSWD is supported).")
+    if not forwarding_enabled("/proc/sys/net/ipv4/ip_forward"):
+        raise RuntimeError("Enable net.ipv4.ip_forward=1 on the server before connecting.")
+
+    server4 = ipaddress.IPv4Interface(control["ipv4Server"])
+    client4 = ipaddress.IPv4Address(control["ipv4Client"])
+    if server4.ip == client4 or client4 not in server4.network:
+        raise ValueError("IPv4 tunnel addresses must share a subnet and be distinct")
+    mtu = int(control.get("mtu", 1400))
+    if not 576 <= mtu <= 9000:
+        raise ValueError("MTU must be between 576 and 9000")
+    ipv6_enabled = bool(control.get("ipv6Enabled", False))
+    server6 = None
+    client6 = None
+    if ipv6_enabled:
+        if not forwarding_enabled("/proc/sys/net/ipv6/conf/all/forwarding"):
+            raise RuntimeError("Enable net.ipv6.conf.all.forwarding=1 or disable IPv6 in the profile.")
+        server6 = ipaddress.IPv6Interface(control["ipv6Server"])
+        client6 = ipaddress.IPv6Address(control["ipv6Client"])
+        if server6.ip == client6 or client6 not in server6.network:
+            raise ValueError("IPv6 tunnel addresses must share a subnet and be distinct")
+
+    egress = default_egress()
+    tun_fd, interface = create_tun()
+    rules = []
+    try:
+        run("ip", "link", "set", "dev", interface, "mtu", str(mtu), "up")
+        run("ip", "-4", "addr", "add", str(server4), "dev", interface)
+        run("ip", "-4", "route", "replace", f"{client4}/32", "dev", interface)
+        if ipv6_enabled:
+            run("ip", "-6", "addr", "add", str(server6), "dev", interface)
+            run("ip", "-6", "route", "replace", f"{client6}/128", "dev", interface)
+        rules = firewall_rules(interface, egress, str(client4), str(client6) if client6 else "", ipv6_enabled)
+        return tun_fd, interface, rules, client4, client6
+    except Exception:
+        os.close(tun_fd)
+        run("ip", "link", "del", "dev", interface, check=False)
+        for rule in reversed(rules):
+            run(*rule, check=False)
+        raise
+
+
+def main():
+    if len(sys.argv) != 2 or sys.argv[1] != "--stdio":
+        print("Usage: swock-ssh-tun --stdio", file=sys.stderr)
+        return 2
+    tun_fd = None
+    interface = None
+    rules = []
+    input_stream = None
+    ipv6_enabled = False
+    try:
+        input_stream = os.fdopen(os.dup(0), "rb", buffering=0)
+        raw = read_frame(input_stream)
+        if raw is None:
+            return 1
+        control = json.loads(raw.decode("utf-8"))
+        if control.get("op") != "start":
+            raise ValueError("Expected tunnel start control frame")
+        ipv6_enabled = bool(control.get("ipv6Enabled", False))
+        tun_fd, interface, rules, client4, client6 = configure_tunnel(control)
+        write_frame(sys.stdout.buffer, json.dumps({"ready": True, "interface": interface}).encode("utf-8"))
+        while True:
+            ready, _, _ = select.select([tun_fd, input_stream], [], [])
+            if tun_fd in ready:
+                packet = os.read(tun_fd, MAX_FRAME)
+                if packet:
+                    if ipv6_enabled or packet[0] >> 4 != 6:
+                        write_frame(sys.stdout.buffer, packet)
+            if input_stream in ready:
+                packet = read_frame(input_stream)
+                if packet is None:
+                    break
+                if not ipv6_enabled and packet[0] >> 4 == 6:
+                    continue
+                os.write(tun_fd, packet)
+        return 0
+    except Exception as error:
+        try:
+            write_frame(sys.stdout.buffer, json.dumps({"ready": False, "error": str(error)}).encode("utf-8"))
+        except Exception:
+            pass
+        print(str(error), file=sys.stderr)
+        return 1
+    finally:
+        if tun_fd is not None:
+            os.close(tun_fd)
+        if interface:
+            run("ip", "link", "del", "dev", interface, check=False)
+        for rule in reversed(rules):
+            run(*rule, check=False)
+        if input_stream is not None:
+            input_stream.close()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

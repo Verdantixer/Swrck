@@ -15,17 +15,23 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.os.Build
 import android.net.VpnService
 import android.net.wifi.WifiManager
-import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.swock.vpn.swock.networking.AdvancedOptions
-import com.swock.vpn.swock.networking.ShadowsocksEngine
-import com.swock.vpn.swock.networking.TunnelRoute
+import com.swock.vpn.swock.networking.ProfileVpnEngine
+import com.swock.vpn.swock.networking.SingboxCoreEngine
+import com.swock.vpn.swock.networking.SshVpnEngine
+import com.swock.vpn.swock.networking.XrayCoreEngine
+import com.swock.vpn.swock.networking.XrayProfileConfigurationException
+import com.swock.vpn.swock.networking.XrayRuntimeException
 import org.json.JSONObject
+import java.net.Inet4Address
+import java.net.Inet6Address
 
 class MyVpnService : VpnService() {
     @Volatile private var shouldRun = false
@@ -37,7 +43,7 @@ class MyVpnService : VpnService() {
     private val connectivityManager by lazy { getSystemService(ConnectivityManager::class.java) }
     @Volatile private var underlyingNetwork: Network? = null
     private val engine by lazy {
-        ShadowsocksEngine(
+        ProfileVpnEngine(
             this,
             underlyingNetwork = { underlyingNetwork },
             onStatus = { state, message ->
@@ -111,17 +117,13 @@ class MyVpnService : VpnService() {
         fun statistics(): Map<String, Any?> = currentStatistics
         fun validateProfile(profileJson: String): String? = try {
             val profile = JSONObject(profileJson)
-            val protocol = profile.optString("protocol", "swock").lowercase()
-            when {
-                profile.optString("server").isBlank() -> "Profile server is missing"
-                profile.optInt("port") !in 1..65535 -> "Profile port must be 1–65535"
-                protocol == "swock" && !profile.optString("serverPublicKey").matches(Regex("^[0-9a-fA-F]{64}$")) -> "Profile server key is invalid"
-                protocol == "swock" && !profile.optString("clientPrivateKey").matches(Regex("^[0-9a-fA-F]{64}$")) -> "Profile client key is invalid"
-                protocol == "swock" && !profile.optString("tunnelAddress").matches(
-                    Regex("^10\\.8\\.0\\.(?:[2-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-4])$"),
-                ) -> "Profile tunnel IP is missing or invalid. Import a current Swock profile URI."
-                else -> null
-            }
+            val protocol = profile.optString("protocol", "xray").lowercase()
+            val singboxCore = profile.optString("core").equals("singbox", ignoreCase = true)
+            if (protocol == "ssh") {
+                SshVpnEngine.validateConfig(profileJson)
+            } else if (singboxCore) {
+                SingboxCoreEngine.validateProfile(profileJson)
+            } else XrayCoreEngine.validateProfile(profileJson)
         } catch (_: Exception) {
             "Profile data could not be read"
         }
@@ -189,67 +191,103 @@ class MyVpnService : VpnService() {
                 recordVpnEvent(currentStatus["message"].toString())
                 closeVpnInterface()
                 val profile = JSONObject(profileJson)
-                val tunnelAddress = profile.optString("tunnelAddress").ifBlank { "10.8.0.2" }
-                require(tunnelAddress.matches(Regex("^10\\.8\\.0\\.(?:[2-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-4])$"))) {
-                    "Profile tunnel address must be in 10.8.0.2-10.8.0.254"
+                val sshTunnel = profile.optString("protocol").equals("ssh", true)
+                val singboxCore = profile.optString("core").equals("singbox", ignoreCase = true)
+                val protocolLabel = when (profile.optString("protocol").lowercase()) {
+                    "ssh" -> "SSH"
+                    "hysteria2" -> "Hysteria 2"
+                    "directproxy" -> "Direct proxy"
+                    "xray" -> if (singboxCore) "Sing-box JSON" else "Xray JSON"
+                    else -> profile.optString("protocol").uppercase().ifBlank { "Proxy" }
                 }
-                val builder = Builder()
-                    .setSession("Swock")
-                    .addAddress(tunnelAddress, 32)
-                    .addRoute("0.0.0.0", 0)
+                val builder = Builder().setSession(when {
+                    sshTunnel -> "Swock · SSH"
+                    else -> "Swock · $protocolLabel"
+                })
+                val mtu = when {
+                    sshTunnel -> profile.optJSONObject("ssh")?.optInt("mtu", 1400) ?: 1400
+                    singboxCore -> SingboxCoreEngine.configuredMtu(profileJson)
+                    else -> XrayCoreEngine.configuredMtu(profileJson)
+                }
+                val advanced = AdvancedOptions.from(profile)
+                val engineProfileJson: String
+                if (sshTunnel) {
+                    builder.addAddress("26.26.26.1", 30)
+                        .addRoute("0.0.0.0", 0)
+                        .addAddress("fd26:26:26::1", 126)
+                        .addRoute("::", 0)
+                    engineProfileJson = profile.toString()
+                } else {
+                    builder.addAddress("26.26.26.1", 30)
+                        .addRoute("0.0.0.0", 0)
+                        .addAddress("fd26:26:26::1", 126)
+                        .addRoute("::", 0)
+                    engineProfileJson = profileJson
+                }
+                builder.setMtu(mtu)
+                val ipStack = if (advanced.ipv6Enabled) "dual-stack" else "IPv4-only; IPv6 blocked"
+                recordVpnEvent(when {
+                    sshTunnel -> "Starting SSH tunnel ($ipStack, MTU $mtu)"
+                    singboxCore -> "Starting $protocolLabel via Sing-box with $ipStack routes (MTU $mtu)"
+                    else -> "Starting $protocolLabel via Xray-core with $ipStack routes (MTU $mtu)"
+                })
                 val physicalNetwork = getUnderlyingNetwork()
-                val route = TunnelRoute.primary(profile)
-                val transport = when {
-                    route.tls && route.webSocket -> "WSS"
-                    route.tls -> "TLS"
-                    route.webSocket -> "WebSocket"
-                    else -> "TCP"
-                }
                 val netLabel = physicalNetwork?.let { networkType(it) } ?: "system default network"
-                recordVpnEvent(
-                    "Attempt ${retries + 1}: $transport to ${profile.optString("server").trim()}:${route.port} over $netLabel",
-                )
+                val engineLabel = when {
+                    sshTunnel -> "SSH"
+                    singboxCore -> "$protocolLabel via Sing-box"
+                    else -> "$protocolLabel via Xray-core"
+                }
+                recordVpnEvent("Attempt ${retries + 1}: $engineLabel over $netLabel")
                 if (physicalNetwork != null) {
                     builder.setUnderlyingNetworks(arrayOf(physicalNetwork))
                 } else {
                     builder.setUnderlyingNetworks(null)
                 }
-                val advanced = AdvancedOptions.from(profile)
                 if (advanced.summary().isNotEmpty()) recordVpnEvent("Advanced options: ${advanced.summary()}")
-                if (advanced.adaptiveMtu) {
-                    val route = engine.plannedRoute(profile)
-                    val mtu = adaptiveMtu(route)
-                    builder.setMtu(mtu)
-                    recordVpnEvent("Adaptive MTU: $mtu bytes for ${route.label} (${route.overheadBytes} bytes of tunnel overhead)")
-                }
                 if (advanced.callStability) acquireStabilityLocks() else releaseStabilityLocks()
                 val dns = profile.optJSONObject("dns")
                 val dnsEnabled = dns?.optBoolean("enabled", false) == true
-                val dnsServers = mutableListOf<String>()
-                if (dnsEnabled) {
+                val customDnsServers = if (dnsEnabled) {
                     listOf("primary", "secondary", "tertiary")
                         .mapNotNull { dns?.optString(it)?.trim() }
-                        .filter { it.isNotEmpty() && isValidIpAddress(it) }
-                        .forEach { dnsServers.add(it) }
+                        .filter {
+                            it.isNotEmpty() && isValidIpAddress(it) &&
+                                (advanced.ipv6Enabled || ':' !in it)
+                        }
+                } else emptyList()
+                // Use the active network's resolvers unless the profile provides DNS;
+                // do not inject public resolver addresses when the network has none.
+                val physicalDnsServers = try {
+                    physicalNetwork?.let { connectivityManager.getLinkProperties(it)?.dnsServers }
+                        .orEmpty()
+                        .filter { it is Inet4Address || it is Inet6Address }
+                        .mapNotNull { it.hostAddress?.substringBefore('%') }
+                        .filter {
+                            it.isNotEmpty() && isValidIpAddress(it) &&
+                                (advanced.ipv6Enabled || ':' !in it)
+                        }
+                } catch (_: Exception) { emptyList() }
+                val dnsServers =
+                    (customDnsServers.ifEmpty { physicalDnsServers }).distinct()
+                dnsServers.forEach { server ->
+                    try {
+                        builder.addDnsServer(server)
+                    } catch (error: Exception) {
+                        Log.w("SwockVpnService", "Could not add DNS server $server: ${error.message}")
+                    }
                 }
                 if (dnsServers.isNotEmpty()) {
-                    dnsServers.distinct().forEach { server ->
-                        try {
-                            builder.addDnsServer(server)
-                        } catch (e: Exception) {
-                            Log.w("SwockVpnService", "Could not add DNS server $server: ${e.message}")
-                        }
-                    }
-                    recordVpnEvent("Custom DNS active: ${dnsServers.distinct().joinToString(", ")}")
-                } else if (dnsEnabled) {
-                    val defaultDns = listOf("1.1.1.1", "8.8.8.8", "9.9.9.9")
-                    defaultDns.forEach { builder.addDnsServer(it) }
-                    recordVpnEvent("Privacy DNS active: ${defaultDns.joinToString(", ")}")
+                    recordVpnEvent(
+                        "${if (customDnsServers.isNotEmpty()) "Custom" else "Network"} DNS active: ${dnsServers.joinToString(", ")}",
+                    )
+                } else {
+                    recordVpnEvent("No DNS servers are available on the active network")
                 }
                 vpnInterface = builder.establish()
                 requireNotNull(vpnInterface) { "Unable to establish VPN interface" }
                 recordVpnEvent("VPN interface established")
-                engine.start(profileJson, vpnInterface!!)
+                engine.start(engineProfileJson, vpnInterface!!)
                 retries = 0
                 currentStatus = engine.getStatus()
                 while (shouldRun && engine.getStatus()["state"] == "connected") {
@@ -269,6 +307,30 @@ class MyVpnService : VpnService() {
             } catch (error: Exception) {
                 if (!shouldRun) break
                 Log.e("SwockVpnService", "VPN connection attempt failed", error)
+                if (error is XrayProfileConfigurationException || error is XrayRuntimeException) {
+                    shouldRun = false
+                    if (error is XrayProfileConfigurationException) {
+                        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                            .remove(PROFILE_KEY)
+                            .apply()
+                    }
+                    engine.stop()
+                    closeVpnInterface()
+                    releaseStabilityLocks()
+                    val detail = error.message?.takeIf { it.isNotBlank() }
+                        ?: "Xray-core rejected the imported profile configuration."
+                    currentStatus = mapOf(
+                        "state" to "error",
+                        "connected" to false,
+                        "message" to detail,
+                    )
+                    recordVpnEvent("Xray startup failed: $detail")
+                    currentStatistics = engine.getStatistics()
+                    updateVpnNotification("error")
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopSelf()
+                    return
+                }
                 val engineStatus = engine.getStatus()
                 val phase = engineStatus["message"]?.toString()?.takeIf {
                     engineStatus["state"] == "connecting" || engineStatus["state"] == "error"
@@ -387,22 +449,6 @@ class MyVpnService : VpnService() {
             capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "Ethernet"
             else -> "other network"
         }
-    }
-
-    // Sizes the tunnel MTU so a tunneled packet plus its transport overhead fits one network packet.
-    @Suppress("DEPRECATION")
-    private fun adaptiveMtu(route: TunnelRoute): Int {
-        val network = getUnderlyingNetwork()
-        val capabilities = network?.let { connectivityManager.getNetworkCapabilities(it) }
-        val reportedMtu = if (network != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            connectivityManager.getLinkProperties(network)?.mtu ?: 0
-        } else 0
-        val linkMtu = when {
-            reportedMtu in 1200..9000 -> minOf(reportedMtu, 1500)
-            capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true -> 1400
-            else -> 1500
-        }
-        return (linkMtu - route.overheadBytes).coerceIn(1280, 1500)
     }
 
     private fun acquireStabilityLocks() {

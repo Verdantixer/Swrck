@@ -18,6 +18,7 @@ class AdvancedScreen extends StatefulWidget {
 class _AdvancedScreenState extends State<AdvancedScreen> {
   final _service = AdvancedSettingsService();
   final _vpn = NativeVpnService();
+  final _udpGatewayPort = TextEditingController(text: '7200');
   AdvancedSettings _settings = const AdvancedSettings();
   bool _loaded = false;
   bool _vpnRunning = false;
@@ -31,6 +32,7 @@ class _AdvancedScreenState extends State<AdvancedScreen> {
       if (!mounted) return;
       setState(() {
         _settings = settings;
+        _udpGatewayPort.text = settings.udpGatewayPort.toString();
         _loaded = true;
       });
     });
@@ -41,6 +43,7 @@ class _AdvancedScreenState extends State<AdvancedScreen> {
   @override
   void dispose() {
     _timer?.cancel();
+    _udpGatewayPort.dispose();
     super.dispose();
   }
 
@@ -58,12 +61,7 @@ class _AdvancedScreenState extends State<AdvancedScreen> {
 
   Future<void> _update(AdvancedSettings next) async {
     if (_vpnRunning || _saving) return;
-    final enabling =
-        (!_settings.adaptiveMtu && next.adaptiveMtu) ||
-        (!_settings.packetLossPrevention && next.packetLossPrevention) ||
-        (!_settings.callStability && next.callStability) ||
-        (!_settings.lowLatency && next.lowLatency) ||
-        (!_settings.stealthObfuscation && next.stealthObfuscation);
+    final enabling = !_settings.callStability && next.callStability;
     setState(() {
       _saving = true;
       _settings = next;
@@ -83,6 +81,20 @@ class _AdvancedScreenState extends State<AdvancedScreen> {
       }
     } finally {
       if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _saveUdpGatewayPort() async {
+    final port = int.tryParse(_udpGatewayPort.text.trim());
+    if (port == null || port < 1 || port > 65535) {
+      _udpGatewayPort.text = _settings.udpGatewayPort.toString();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Enter a port from 1 to 65535.')),
+      );
+      return;
+    }
+    if (port != _settings.udpGatewayPort) {
+      await _update(_settings.copyWith(udpGatewayPort: port));
     }
   }
 
@@ -135,70 +147,74 @@ class _AdvancedScreenState extends State<AdvancedScreen> {
           ),
           const SizedBox(height: 10),
           _OptionCard(
-            icon: Icons.shield_rounded,
-            title: 'Stealth Anti-DPI Obfuscation',
+            icon: Icons.network_check_rounded,
+            title: 'Enable IPv6',
             description:
-                'Applies custom cryptographic packet signature randomization '
-                'and size obfuscation to bypass strict ISP filtering, Deep Packet Inspection (DPI), '
-                'and firewall throttling on restricted networks.',
-            value: _settings.stealthObfuscation,
+                'Applies to all VPN protocols. When disabled, IPv6 traffic is blocked instead of bypassing the VPN.',
+            value: _settings.ipv6Enabled,
             enabled: editable,
-            onChanged:
-                (value) =>
-                    _update(_settings.copyWith(stealthObfuscation: value)),
-          ),
-          const SizedBox(height: 10),
-          _OptionCard(
-            icon: Icons.straighten_rounded,
-            title: 'Adaptive MTU',
-            description:
-                'Sizes the tunnel packets to your current network and connection '
-                'type so they are not split on the way. Smoother streaming and '
-                'fewer delayed packets while gaming.',
-            value: _settings.adaptiveMtu,
-            enabled: editable,
-            onChanged:
-                (value) => _update(_settings.copyWith(adaptiveMtu: value)),
-          ),
-          const SizedBox(height: 10),
-          _OptionCard(
-            icon: Icons.alt_route_rounded,
-            title: 'Packet-Loss Prevention',
-            description:
-                'Watches the tunnel for packet loss and automatically switches '
-                'to another server route when loss becomes excessive.',
-            value: _settings.packetLossPrevention,
-            enabled: editable,
-            onChanged:
-                (value) =>
-                    _update(_settings.copyWith(packetLossPrevention: value)),
+            onChanged: (value) =>
+                _update(_settings.copyWith(ipv6Enabled: value)),
           ),
           const SizedBox(height: 10),
           _OptionCard(
             icon: Icons.call_outlined,
             title: 'Call Stability Mode',
             description:
-                'Prioritizes consistent latency and packet delivery for voice '
-                'and video calls. Keeps Wi-Fi in low-latency mode and recovers '
-                'a stalled tunnel quickly.',
+                'Keeps the device awake and enables Wi-Fi low-latency mode '
+                'while the VPN is connected.',
             value: _settings.callStability,
             enabled: editable,
-            onChanged:
-                (value) => _update(_settings.copyWith(callStability: value)),
+            onChanged: (value) =>
+                _update(_settings.copyWith(callStability: value)),
           ),
           const SizedBox(height: 10),
           _OptionCard(
-            icon: Icons.bolt_rounded,
-            title: 'Low Latency Mode',
+            icon: Icons.swap_horiz_rounded,
+            title: 'SSH UDP Gateway',
             description:
-                'Prioritizes latency over maximum throughput. Sends every packet '
-                'immediately with smaller buffers. Best for gaming; large '
-                'downloads may be slightly slower.',
-            value: _settings.lowLatency,
+                'Sends SSH tunnel UDP traffic through a BadVPN UDPGW service on the SSH server. Proxy protocols keep their own UDP routing.',
+            value: _settings.udpGatewayEnabled,
             enabled: editable,
-            onChanged:
-                (value) => _update(_settings.copyWith(lowLatency: value)),
+            onChanged: (value) => _update(
+              _settings.copyWith(udpGatewayEnabled: value),
+            ),
           ),
+          if (_settings.udpGatewayEnabled) ...[
+            const SizedBox(height: 8),
+            SwockCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'UDPGW port',
+                    style: TextStyle(fontSize: 14),
+                  ),
+                  const SizedBox(height: 5),
+                  const Text(
+                    'Default: 7200. The gateway must be running on the SSH server.',
+                    style: TextStyle(
+                      color: SwockColors.muted,
+                      fontSize: 12,
+                      height: 1.35,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: _udpGatewayPort,
+                    enabled: editable,
+                    keyboardType: TextInputType.number,
+                    textInputAction: TextInputAction.done,
+                    decoration: const InputDecoration(
+                      labelText: 'Port',
+                      hintText: '7200',
+                    ),
+                    onSubmitted: (_) => _saveUdpGatewayPort(),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -224,51 +240,51 @@ class _OptionCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => AnimatedOpacity(
-    duration: const Duration(milliseconds: 200),
-    opacity: enabled ? 1 : .6,
-    child: SwockCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
+        duration: const Duration(milliseconds: 200),
+        opacity: enabled ? 1 : .6,
+        child: SwockCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: (value ? SwockColors.green : SwockColors.faint)
-                      .withValues(alpha: .12),
-                ),
-                child: Icon(
-                  icon,
-                  size: 21,
-                  color: value ? SwockColors.green : SwockColors.muted,
-                ),
+              Row(
+                children: [
+                  Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: (value ? SwockColors.green : SwockColors.faint)
+                          .withValues(alpha: .12),
+                    ),
+                    child: Icon(
+                      icon,
+                      size: 21,
+                      color: value ? SwockColors.green : SwockColors.muted,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(title, style: const TextStyle(fontSize: 15)),
+                  ),
+                  Switch(
+                    value: value,
+                    onChanged: enabled ? onChanged : null,
+                    activeThumbColor: SwockColors.green,
+                    activeTrackColor: SwockColors.green.withValues(alpha: .3),
+                  ),
+                ],
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(title, style: const TextStyle(fontSize: 15)),
-              ),
-              Switch(
-                value: value,
-                onChanged: enabled ? onChanged : null,
-                activeThumbColor: SwockColors.green,
-                activeTrackColor: SwockColors.green.withValues(alpha: .3),
+              const SizedBox(height: 6),
+              Text(
+                description,
+                style: const TextStyle(
+                  color: SwockColors.muted,
+                  fontSize: 12,
+                  height: 1.45,
+                ),
               ),
             ],
           ),
-          const SizedBox(height: 6),
-          Text(
-            description,
-            style: const TextStyle(
-              color: SwockColors.muted,
-              fontSize: 12,
-              height: 1.45,
-            ),
-          ),
-        ],
-      ),
-    ),
-  );
+        ),
+      );
 }

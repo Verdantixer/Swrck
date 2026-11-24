@@ -2,7 +2,7 @@ name: swock
 description: "A new Flutter project."
 publish_to: 'none'
 
-version: 2.2.0+4
+version: 2.2.2+6
 
 environment:
   sdk: '>=3.6.0 <4.0.0'
@@ -22,6 +22,12 @@ dependencies:
 
 dev_dependencies:
   flutter_lints: ^5.0.0
+  flutter_test:
+    sdk: flutter
+
+dependency_overrides:
+  # The newer Android native-interoperability backend fails to register in this app.
+  shared_preferences_android: 2.4.13
 
 flutter:
   uses-material-design: true

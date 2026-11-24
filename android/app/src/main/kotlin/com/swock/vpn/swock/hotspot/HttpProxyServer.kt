@@ -30,6 +30,7 @@ class HttpProxyServer(
     @Volatile private var server: ServerSocket? = null
 
     val bytesTransferred: Long get() = transferred.get()
+    val localPort: Int get() = server?.localPort ?: 0
 
     fun start() {
         val socket = ServerSocket()

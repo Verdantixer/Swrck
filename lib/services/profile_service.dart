@@ -6,6 +6,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../core/app_config.dart';
 import '../models/vpn_profile.dart';
 
+const _removedBuiltInProfileIds = {
+  'builtin-flow-unlimited',
+  'builtin-digicel-unlimited',
+};
+
 class ProfileService {
   ProfileService({FlutterSecureStorage? secureStorage})
       : _secureStorage = secureStorage ?? const FlutterSecureStorage();
@@ -19,12 +24,35 @@ class ProfileService {
       return <VpnProfile>[];
     }
 
-    final Map<String, dynamic> decoded = jsonDecode(raw) as Map<String, dynamic>;
+    final Map<String, dynamic> decoded =
+        jsonDecode(raw) as Map<String, dynamic>;
     final entries = decoded['profiles'] as List<dynamic>? ?? const <dynamic>[];
-
-    return entries
-        .map((entry) => VpnProfile.fromJson(Map<String, dynamic>.from(entry as Map)))
+    final profiles = entries
+        .map((entry) =>
+            VpnProfile.fromJson(Map<String, dynamic>.from(entry as Map)))
         .toList();
+    final removedProfiles = profiles
+        .where((profile) => _removedBuiltInProfileIds.contains(profile.id))
+        .toList();
+    if (removedProfiles.isEmpty) return profiles;
+
+    final remainingProfiles = profiles
+        .where((profile) => !_removedBuiltInProfileIds.contains(profile.id))
+        .toList();
+    await prefs.setString(
+      AppConfig.storageKey,
+      jsonEncode({
+        ...decoded,
+        'profiles':
+            remainingProfiles.map((profile) => profile.toJson()).toList(),
+      }),
+    );
+    for (final profile in removedProfiles) {
+      await _secureStorage.delete(
+        key: '${AppConfig.secureStorageKey}_${profile.id}',
+      );
+    }
+    return remainingProfiles;
   }
 
   Future<void> saveProfiles(List<VpnProfile> profiles) async {

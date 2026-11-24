@@ -10,7 +10,7 @@ This project is intentionally structured to support a real Android `VpnService` 
 
 - Android-only Flutter UI with Material 3
 - Kotlin `VpnService` foundation with native lifecycle handling
-- Real Swock tunnel using X25519 key agreement, per-session directional keys, and ChaCha20-Poly1305 packet protection
+- Xray-core, Sing-box, and SSH VPN engines
 - Strong typing and explicit configuration models
 - Export, import, profile management, and secure storage for sensitive data
 - Clean separation between Flutter UI and native networking
@@ -43,50 +43,36 @@ flutter analyze
 flutter build apk --debug
 ```
 
-## Native tunnel
+## VPN engines
 
-The networking engine is intentionally abstracted in the Kotlin layer:
+Xray profiles use the bundled Xray-core runtime, native Sing-box JSON profiles
+use the bundled Sing-box runtime, and SSH profiles use the native SSH
+full-tunnel implementation. Complete core JSON preserves the protocol features
+supported by the corresponding bundled core. Xray uses the native tun2socks
+bridge; SSH uses that same bridge with its local SSH-backed SOCKS5 endpoint;
+Sing-box receives the Android TUN descriptor through libbox. The pinned
+runtimes and license notices are in `android/app/libs/`.
 
-- `android/app/src/main/kotlin/com/swock/vpn/swock/networking/VpnEngine.kt`
-- `android/app/src/main/kotlin/com/swock/vpn/swock/networking/ShadowsocksEngine.kt`
-- `android/app/src/main/kotlin/com/swock/vpn/swock/networking/TransportEngine.kt`
+SSH uses an app-local SOCKS5 listener and standard SSH TCP forwarding, so it
+does not require a remote helper executable or root access on the SSH server.
+DNS requests are forwarded over TCP when the optional UDP gateway is disabled.
+Other UDP traffic requires a BadVPN UDPGW service reachable over SSH forwarding.
+The Advanced settings screen also has a global **Enable IPv6** switch; when off,
+IPv6 is captured and blocked inside the VPN rather than sent outside it.
 
-`ShadowsocksEngine` is the live Android tunnel implementation. It protects the
-transport socket from the Android VPN route, authenticates the Swock server
-public key, then forwards encrypted IP packets between Android's TUN interface
-and the selected TCP, WebSocket, TLS, or WebSocket-over-TLS endpoint.
+Legacy native Swock tunnel profiles are no longer supported. Import a supported
+proxy share link, Xray JSON, or native Sing-box JSON configuration instead.
 
-New profiles use the `SWK2` handshake. Every connection receives a fresh server
-salt and derives separate client-to-server and server-to-client packet keys,
-preventing AEAD key/nonce reuse across directions and reconnects. The VPS
-assigns each VPN account a unique `10.8.0.2`-`10.8.0.254` address and routes
-return packets by destination, allowing multiple distinct accounts to connect
-at once (up to 253 accounts). A second connection using the same account
-replaces its existing session.
-
-Profiles created before `SWK2` use legacy `SWK1`, which is rejected by updated
-servers by default because its packet layer reuses nonces. After updating the
-Android client and VPS, use **Reissue profile** in the panel for each existing
-account and have users import the replacement URI. Reissuing rotates the client
-key while preserving the assigned address, username, password, and expiry. The
-server has an explicit `--allow-legacy-swk1` migration flag, but
-the installer does not enable it and it should not be enabled in normal use.
-
-## Server-side setup
-
-A real VPS should expose one of the supported transports:
-
-- Swock over TCP
-- Swock over WebSocket
-- Swock over TLS
-- Swock over WebSocket + TLS
-
-Profiles are created by the web panel as `swock://` URIs and contain the actual
-endpoint, server public key, client private key, transport flags, and expiry.
+Profile files use the `.dvs` extension. Files can be imported from device storage
+and exported through Android's file picker. Export can mark a profile read-only
+in Swock, set an expiration date, and optionally protect the file with a
+password. Password-protected files use PBKDF2-HMAC-SHA256, AES-256-CBC, and an
+HMAC-SHA256 integrity check. Expired profiles cannot connect. Locked imported
+profiles can connect while valid, but the app only allows them to be deleted.
 
 ## Security
 
 - Sensitive profile data should be stored in Android Keystore-backed secure storage where practical.
 - Credentials and secrets are not logged.
 - Import validation is required before accepting a profile.
-- Protected export files should use authenticated encryption in a production build.
+- Password-protected `.dvs` exports use authenticated encryption.

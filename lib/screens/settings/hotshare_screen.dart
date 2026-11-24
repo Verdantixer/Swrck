@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -18,14 +19,20 @@ class HotshareScreen extends StatefulWidget {
 class _HotshareScreenState extends State<HotshareScreen> {
   final _service = HotshareService();
   final _vpn = NativeVpnService();
+  final _name = TextEditingController();
+  final _password = TextEditingController();
+  final _port = TextEditingController();
   HotshareStatus _status = const HotshareStatus();
   String _vpnState = 'disconnected';
   bool _busy = false;
+  bool _settingsLoaded = false;
+  bool _directMode = false;
   Timer? _timer;
 
   @override
   void initState() {
     super.initState();
+    unawaited(_loadSettings());
     _refresh();
     _timer = Timer.periodic(const Duration(seconds: 1), (_) => _refresh());
   }
@@ -33,7 +40,29 @@ class _HotshareScreenState extends State<HotshareScreen> {
   @override
   void dispose() {
     _timer?.cancel();
+    _name.dispose();
+    _password.dispose();
+    _port.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadSettings() async {
+    try {
+      final settings = await _service.loadSettings();
+      if (!mounted) return;
+      setState(() {
+        _name.text = settings.name;
+        _password.text = settings.password;
+        _port.text = settings.port == HotshareService.autoPort
+            ? ''
+            : settings.port.toString();
+        _settingsLoaded = true;
+      });
+    } on MissingPluginException {
+      _message('Hotshare settings storage is unavailable.');
+    } on PlatformException catch (error) {
+      _message(error.message ?? 'Hotshare settings could not be loaded.');
+    }
   }
 
   Future<void> _refresh() async {
@@ -68,15 +97,46 @@ class _HotshareScreenState extends State<HotshareScreen> {
       if (_status.isActive) {
         await _service.stop();
       } else {
+        if (!_settingsLoaded) {
+          _message('Hotshare settings are still loading.');
+          return;
+        }
         if (!_vpnConnected) {
           _message('Connect the VPN on the Home tab before starting Hotshare.');
+          return;
+        }
+        final name = _name.text.trim();
+        if (name.isEmpty || utf8.encode(name).length > 22) {
+          _message('Enter a Wi-Fi name suffix no longer than 22 bytes.');
+          return;
+        }
+        if (_password.text.length < 8 || _password.text.length > 63) {
+          _message('Enter a hotspot password from 8 to 63 characters.');
+          return;
+        }
+        final portText = _port.text.trim();
+        final port = portText.isEmpty
+            ? HotshareService.autoPort
+            : int.tryParse(portText);
+        if (port == null ||
+            (port != HotshareService.autoPort &&
+                (port < 1024 || port > 65535))) {
+          _message(
+              'Use automatic port selection or enter a port from 1024 to 65535.');
           return;
         }
         if (!await _service.requestPermissions()) {
           _message('Allow Nearby devices access to create the hotspot.');
           return;
         }
-        await _service.start();
+        await _service.start(
+          settings: HotshareSettings(
+            name: name,
+            password: _password.text,
+            port: port,
+          ),
+          direct: _directMode,
+        );
       }
       await Future<void>.delayed(const Duration(milliseconds: 300));
       await _refresh();
@@ -101,18 +161,18 @@ class _HotshareScreenState extends State<HotshareScreen> {
   }
 
   Color get _stateColor => switch (_status.state) {
-    'running' => SwockColors.green,
-    'starting' => SwockColors.amber,
-    'error' => SwockColors.red,
-    _ => SwockColors.faint,
-  };
+        'running' => SwockColors.green,
+        'starting' => SwockColors.amber,
+        'error' => SwockColors.red,
+        _ => SwockColors.faint,
+      };
 
   String get _stateLabel => switch (_status.state) {
-    'running' => 'SHARING',
-    'starting' => 'STARTING',
-    'error' => 'FAILED',
-    _ => 'OFF',
-  };
+        'running' => 'SHARING',
+        'starting' => 'STARTING',
+        'error' => 'FAILED',
+        _ => 'OFF',
+      };
 
   @override
   Widget build(BuildContext context) {
@@ -138,6 +198,8 @@ class _HotshareScreenState extends State<HotshareScreen> {
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
         children: [
           _statusCard(),
+          const SizedBox(height: 10),
+          _modeCard(),
           const SizedBox(height: 10),
           _credentialsCard(),
           const SizedBox(height: 10),
@@ -170,7 +232,7 @@ class _HotshareScreenState extends State<HotshareScreen> {
             _connectCard(),
           ],
           const SizedBox(height: 10),
-          const SwockCard(
+          SwockCard(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -178,13 +240,12 @@ class _HotshareScreenState extends State<HotshareScreen> {
                 SizedBox(height: 10),
                 Text(
                   'Connect the Swock VPN, then start Hotshare to create a private '
-                  'Wi-Fi Direct network. The network name and password are fixed '
-                  'and shown below. On each device, join that network and set its '
-                  'Wi-Fi proxy to Manual using the live proxy host and port shown '
-                  'here. Browsers and apps that support a manual proxy will use '
-                  'the VPN tunnel. Keep the VPN connected while sharing; Hotshare '
-                  'stops automatically when the tunnel disconnects. Some system '
-                  'services and apps ignore manual proxy settings.',
+                  'Wi-Fi Direct network. Proxy mode requires each device to set '
+                  'the displayed manual proxy. Root direct mode routes device '
+                  'traffic through the VPN without proxy settings and requires '
+                  'root access on this phone. Direct mode forwards IPv4 only; '
+                  'IPv6 forwarding is blocked. Keep the VPN connected while '
+                  'sharing; Hotshare stops if the VPN disconnects.',
                   style: TextStyle(
                     color: SwockColors.muted,
                     fontSize: 12,
@@ -195,6 +256,27 @@ class _HotshareScreenState extends State<HotshareScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _modeCard() {
+    return SwockCard(
+      child: SwitchListTile(
+        contentPadding: EdgeInsets.zero,
+        value: _directMode,
+        onChanged: _busy || _status.isActive
+            ? null
+            : (value) => setState(() => _directMode = value),
+        activeThumbColor: SwockColors.green,
+        title: const Text(
+          'Root direct mode',
+          style: TextStyle(color: SwockColors.ink, fontSize: 14),
+        ),
+        subtitle: const Text(
+          'No proxy settings on connected devices; requires root access.',
+          style: TextStyle(color: SwockColors.muted, fontSize: 12, height: 1.3),
+        ),
       ),
     );
   }
@@ -245,23 +327,24 @@ class _HotshareScreenState extends State<HotshareScreen> {
   }
 
   Widget _credentialsCard() {
+    final direct = _status.isActive ? _status.mode == 'direct' : _directMode;
     final host = _status.isRunning ? _status.host : '';
-    final ssid = _status.ssid.isNotEmpty ? _status.ssid : HotshareService.ssid;
-    final password =
-        _status.password.isNotEmpty
-            ? _status.password
-            : HotshareService.password;
+    final active = _status.isActive;
     return SwockCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Row(
+          Row(
             children: [
-              Expanded(child: SwockHeading('HOTSPOT')),
-              Icon(Icons.lock_outline, size: 14, color: SwockColors.faint),
+              Expanded(child: SwockHeading('HOTSPOT SETTINGS')),
+              Icon(
+                active ? Icons.lock_outline : Icons.tune,
+                size: 14,
+                color: SwockColors.faint,
+              ),
               SizedBox(width: 4),
               Text(
-                'FIXED',
+                active ? 'ACTIVE' : 'EDITABLE',
                 style: TextStyle(
                   color: SwockColors.faint,
                   fontFamily: 'monospace',
@@ -272,22 +355,84 @@ class _HotshareScreenState extends State<HotshareScreen> {
             ],
           ),
           const SizedBox(height: 8),
-          _valueRow('Wi-Fi name', ssid),
-          _valueRow('Password', password),
-          _valueRow(
-            'Proxy host',
-            host,
-            placeholder: _vpnConnected
-                ? 'Available after Hotshare starts'
-                : 'Connect VPN and start Hotshare',
-          ),
-          _valueRow('Proxy port', _status.port.toString()),
+          if (active) ...[
+            _valueRow('Wi-Fi name', _status.ssid),
+            _valueRow('Password', _status.password),
+            _valueRow('Sharing mode', direct ? 'Root direct' : 'Proxy'),
+            if (!direct) ...[
+              _valueRow('Proxy host', host),
+              _valueRow('Proxy port', _status.port.toString()),
+            ],
+          ] else ...[
+            TextField(
+              controller: _name,
+              enabled: _settingsLoaded && !_busy,
+              maxLength: 22,
+              decoration: const InputDecoration(
+                labelText: 'Wi-Fi name suffix',
+                helperText: 'Android adds the Wi-Fi Direct network prefix.',
+              ),
+            ),
+            TextField(
+              controller: _password,
+              enabled: _settingsLoaded && !_busy,
+              maxLength: 63,
+              decoration: const InputDecoration(
+                labelText: 'Hotspot password',
+              ),
+            ),
+            if (!direct)
+              TextField(
+                controller: _port,
+                enabled: _settingsLoaded && !_busy,
+                keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                decoration: const InputDecoration(
+                  labelText: 'Proxy port',
+                  helperText: 'Leave blank to choose an available port.',
+                ),
+              ),
+          ],
         ],
       ),
     );
   }
 
   Widget _connectCard() {
+    if (_status.mode == 'direct') {
+      return SwockCard(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const SwockHeading('CONNECT A DEVICE'),
+            const SizedBox(height: 10),
+            _step('1', 'Join the Wi-Fi network ${_status.ssid}.'),
+            _step(
+              '2',
+              'Use the device normally; no proxy settings are needed.',
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              "Shared traffic is routed through this phone's VPN. IPv6 forwarding is blocked.",
+              style: TextStyle(
+                color: SwockColors.muted,
+                fontSize: 12,
+                height: 1.4,
+              ),
+            ),
+            const Divider(color: SwockColors.line, height: 20),
+            Text(
+              'Devices: ${_status.clients}',
+              style: const TextStyle(
+                color: SwockColors.muted,
+                fontFamily: 'monospace',
+                fontSize: 12,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
     final address = '${_status.host}:${_status.port}';
     return SwockCard(
       child: Column(
@@ -332,41 +477,41 @@ class _HotshareScreenState extends State<HotshareScreen> {
   }
 
   Widget _step(String number, String text) => Padding(
-    padding: const EdgeInsets.only(bottom: 6),
-    child: Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Container(
-          width: 20,
-          height: 20,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: SwockColors.green.withValues(alpha: .14),
-          ),
-          child: Text(
-            number,
-            style: const TextStyle(
-              color: SwockColors.green,
-              fontSize: 11,
-              fontWeight: FontWeight.w700,
+        padding: const EdgeInsets.only(bottom: 6),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: 20,
+              height: 20,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: SwockColors.green.withValues(alpha: .14),
+              ),
+              child: Text(
+                number,
+                style: const TextStyle(
+                  color: SwockColors.green,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
             ),
-          ),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Text(
-            text,
-            style: const TextStyle(
-              color: SwockColors.ink,
-              fontSize: 13,
-              height: 1.35,
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                text,
+                style: const TextStyle(
+                  color: SwockColors.ink,
+                  fontSize: 13,
+                  height: 1.35,
+                ),
+              ),
             ),
-          ),
+          ],
         ),
-      ],
-    ),
-  );
+      );
 
   Widget _valueRow(String label, String value, {String placeholder = ''}) {
     final empty = value.isEmpty;

@@ -122,12 +122,11 @@ class _AddTimeButtonState extends State<AddTimeButton>
 
   @override
   Widget build(BuildContext context) {
-    final label =
-        widget.busy
-            ? 'LOADING'
-            : widget.cooldownSeconds > 0
+    final label = widget.busy
+        ? 'LOADING'
+        : widget.cooldownSeconds > 0
             ? 'WAIT ${widget.cooldownSeconds}s'
-            : 'AD TO SPIN';
+            : 'ADD TIME';
     return AnimatedScale(
       scale: _pressed && _enabled ? .95 : 1,
       duration: const Duration(milliseconds: 110),
@@ -146,17 +145,16 @@ class _AddTimeButtonState extends State<AddTimeButton>
               height: 56,
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(7),
-                boxShadow:
-                    _enabled
-                        ? [
-                          BoxShadow(
-                            color: SwockColors.green.withValues(
-                              alpha: (.10 + .16 * wave) * glow,
-                            ),
-                            blurRadius: 8 + 8 * wave,
+                boxShadow: _enabled
+                    ? [
+                        BoxShadow(
+                          color: SwockColors.green.withValues(
+                            alpha: (.10 + .16 * wave) * glow,
                           ),
-                        ]
-                        : const [],
+                          blurRadius: 8 + 8 * wave,
+                        ),
+                      ]
+                    : const [],
               ),
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(7),
@@ -168,13 +166,12 @@ class _AddTimeButtonState extends State<AddTimeButton>
                         gradient: LinearGradient(
                           begin: Alignment.topLeft,
                           end: Alignment.bottomRight,
-                          colors:
-                              _enabled
-                                  ? const [Color(0xFF0E7C58), Color(0xFF075F63)]
-                                  : const [
-                                    Color(0xFF1B231E),
-                                    Color(0xFF161C18),
-                                  ],
+                          colors: _enabled
+                              ? const [Color(0xFF0E7C58), Color(0xFF075F63)]
+                              : const [
+                                  Color(0xFF1B231E),
+                                  Color(0xFF161C18),
+                                ],
                         ),
                       ),
                     ),
@@ -204,10 +201,9 @@ class _AddTimeButtonState extends State<AddTimeButton>
                     DecoratedBox(
                       decoration: BoxDecoration(
                         border: Border.all(
-                          color:
-                              _enabled
-                                  ? SwockColors.green.withValues(alpha: .55)
-                                  : SwockColors.line,
+                          color: _enabled
+                              ? SwockColors.green.withValues(alpha: .55)
+                              : SwockColors.line,
                         ),
                         borderRadius: BorderRadius.circular(7),
                       ),
@@ -218,36 +214,33 @@ class _AddTimeButtonState extends State<AddTimeButton>
                         children: [
                           widget.busy
                               ? const SizedBox(
-                                width: 20,
-                                height: 20,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  color: SwockColors.green,
-                                ),
-                              )
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: SwockColors.green,
+                                  ),
+                                )
                               : Transform.rotate(
-                                angle:
-                                    _enabled
-                                        ? math.sin(_pulse.value * math.pi * 2) *
-                                            .12
-                                        : 0,
-                                child: Icon(
-                                  Icons.add_alarm_rounded,
-                                  size: 18,
-                                  color:
-                                      _enabled
-                                          ? const Color(0xFFD9FFEF)
-                                          : SwockColors.faint,
+                                  angle: _enabled
+                                      ? math.sin(_pulse.value * math.pi * 2) *
+                                          .12
+                                      : 0,
+                                  child: Icon(
+                                    Icons.add_alarm_rounded,
+                                    size: 18,
+                                    color: _enabled
+                                        ? const Color(0xFFD9FFEF)
+                                        : SwockColors.faint,
+                                  ),
                                 ),
-                              ),
                           const SizedBox(height: 4),
                           Text(
                             label,
                             style: TextStyle(
-                              color:
-                                  _enabled
-                                      ? const Color(0xFFD9FFEF)
-                                      : SwockColors.muted,
+                              color: _enabled
+                                  ? const Color(0xFFD9FFEF)
+                                  : SwockColors.muted,
                               fontFamily: 'monospace',
                               fontSize: 8,
                               fontWeight: FontWeight.w700,
@@ -268,238 +261,231 @@ class _AddTimeButtonState extends State<AddTimeButton>
   }
 }
 
-/// Spins to [reward], announces it, then closes itself and returns it.
-class RewardWheelDialog extends StatefulWidget {
-  const RewardWheelDialog({super.key});
+class RewardTimeDialog extends StatefulWidget {
+  const RewardTimeDialog({
+    super.key,
+    required this.showRewardAd,
+    required this.onRewardComplete,
+  });
 
-  static final segments = List<TimeReward>.unmodifiable(
-    List.generate(TimeReward.wheelSize, TimeReward.atWheelIndex),
-  );
+  final Future<bool> Function() showRewardAd;
+  final Future<void> Function() onRewardComplete;
 
   @override
-  State<RewardWheelDialog> createState() => _RewardWheelDialogState();
+  State<RewardTimeDialog> createState() => _RewardTimeDialogState();
 }
 
-class _RewardWheelDialogState extends State<RewardWheelDialog>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _spin = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 5400),
-  );
-  late final Animation<double> _eased = CurvedAnimation(
-    parent: _spin,
-    curve: Curves.easeOutQuart,
-  );
-  late final int _selectedIndex;
-  late final TimeReward _reward;
-  late final double _target;
-  Timer? _closeTimer;
-  bool _finished = false;
+class _RewardTimeDialogState extends State<RewardTimeDialog> {
+  static const _requiredAds = 3;
+  int _watchedAds = 0;
+  int _cooldown = 0;
+  bool _busy = false;
+  String? _message;
+  Timer? _cooldownTimer;
 
   @override
-  void initState() {
-    super.initState();
-    final random = math.Random.secure();
-    _selectedIndex = TimeReward.drawWheelIndex(random);
-    _reward = TimeReward.atWheelIndex(_selectedIndex);
-    final slice = 2 * math.pi / RewardWheelDialog.segments.length;
-    // A Dart canvas arc starts at 3 o'clock; this aligns the chosen wedge
-    // center with the fixed pointer at 12 o'clock after the eased spin.
-    _target = 2 * math.pi * 6 - (_selectedIndex + .5) * slice;
-    _spin.forward().whenComplete(() {
-      if (!mounted) return;
-      setState(() => _finished = true);
-      _closeTimer = Timer(const Duration(milliseconds: 2400), () {
-        if (mounted) Navigator.of(context).pop(_reward);
+  void dispose() {
+    _cooldownTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _watchAd() async {
+    if (_busy || _cooldown > 0 || _watchedAds >= _requiredAds) return;
+    setState(() {
+      _busy = true;
+      _message = null;
+    });
+    var earned = false;
+    try {
+      earned = await widget.showRewardAd();
+    } catch (_) {
+      earned = false;
+    }
+    if (!mounted) return;
+    if (!earned) {
+      setState(() {
+        _busy = false;
+        _message = 'The ad reward was not confirmed. Please try again.';
       });
+      return;
+    }
+
+    final nextCount = _watchedAds + 1;
+    if (nextCount == _requiredAds) {
+      setState(() {
+        _watchedAds = nextCount;
+        _message = 'All rewards confirmed. Adding your eight hours…';
+      });
+      try {
+        await widget.onRewardComplete();
+      } catch (_) {
+        if (!mounted) return;
+        setState(() {
+          _busy = false;
+          _message = 'Could not save the time reward. Please try again.';
+        });
+        return;
+      }
+      if (mounted) Navigator.of(context).pop(true);
+      return;
+    }
+
+    setState(() {
+      _watchedAds = nextCount;
+      _busy = false;
+      _cooldown = 5;
+      _message = 'Reward counted. Your next ad will be ready shortly.';
+    });
+    _cooldownTimer?.cancel();
+    _cooldownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      setState(() => _cooldown = _cooldown > 0 ? _cooldown - 1 : 0);
+      if (_cooldown == 0) timer.cancel();
     });
   }
 
   @override
-  void dispose() {
-    _closeTimer?.cancel();
-    _spin.dispose();
-    super.dispose();
-  }
-
-  bool get _jackpot => _reward.duration >= const Duration(days: 1);
-
-  @override
-  Widget build(BuildContext context) => PopScope(
-    canPop: false,
-    child: Dialog(
-      backgroundColor: const Color(0xFF101713),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: const BorderSide(color: Color(0xFF345341)),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 24, 20, 22),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text(
-              'SPIN FOR TIME',
-              style: TextStyle(
-                color: SwockColors.green,
-                fontFamily: 'monospace',
-                letterSpacing: 2.4,
-                fontSize: 12,
+  Widget build(BuildContext context) => Dialog(
+        backgroundColor: const Color(0xFF101713),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(color: SwockColors.green.withValues(alpha: .36)),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(22, 24, 22, 18),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 58,
+                height: 58,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: SwockColors.green.withValues(alpha: .12),
+                  border: Border.all(
+                      color: SwockColors.green.withValues(alpha: .5)),
+                ),
+                child: const Icon(
+                  Icons.timer_rounded,
+                  color: SwockColors.green,
+                  size: 29,
+                ),
               ),
-            ),
-            const SizedBox(height: 6),
-            const Text(
-              'One rewarded video unlocks one spin. The prize goes to your VPN timer.',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: SwockColors.muted,
-                fontSize: 11,
-                height: 1.35,
+              const SizedBox(height: 16),
+              const Text(
+                'ADD 8 HOURS',
+                style: TextStyle(
+                  color: SwockColors.green,
+                  fontFamily: 'monospace',
+                  letterSpacing: 2,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
-            ),
-            const SizedBox(height: 16),
-            SizedBox(
-              width: 260,
-              height: 276,
-              child: Stack(
-                alignment: Alignment.topCenter,
-                children: [
-                  Positioned(
-                    top: 16,
-                    child: AnimatedBuilder(
-                      animation: _eased,
-                      builder:
-                          (context, _) => CustomPaint(
-                            size: const Size.square(260),
-                            painter: _WheelPainter(
-                              angle: _eased.value * _target,
-                              segments: RewardWheelDialog.segments,
-                            ),
-                          ),
-                    ),
-                  ),
-                  const Icon(
-                    Icons.arrow_drop_down_rounded,
-                    size: 52,
-                    color: Color(0xFFFFD45C),
-                    shadows: [Shadow(color: Colors.black54, blurRadius: 6)],
-                  ),
-                ],
+              const SizedBox(height: 8),
+              const Text(
+                'Watch three rewarded ads to add eight hours to your VPN timer.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: SwockColors.muted, height: 1.4),
               ),
-            ),
-            const SizedBox(height: 4),
-            const Text(
-              '5 min 45%  ·  15 min 33%  ·  1 hr 20%  ·  1 day 1%  ·  24 days 1%',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: SwockColors.faint,
-                fontFamily: 'monospace',
-                fontSize: 9,
-              ),
-            ),
-            const SizedBox(height: 14),
-            AnimatedSwitcher(
-              duration: const Duration(milliseconds: 350),
-              transitionBuilder:
-                  (child, animation) => ScaleTransition(
-                    scale: CurvedAnimation(
-                      parent: animation,
-                      curve: Curves.easeOutBack,
-                    ),
-                    child: FadeTransition(opacity: animation, child: child),
-                  ),
-              child:
-                  _finished
-                      ? Text(
-                        'You won ${_reward.label}!',
-                        key: const ValueKey('won'),
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
+              const SizedBox(height: 20),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: List.generate(_requiredAds, (index) {
+                  final complete = index < _watchedAds;
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 7),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 220),
+                      width: 48,
+                      height: 48,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: complete
+                            ? SwockColors.green.withValues(alpha: .18)
+                            : const Color(0xFF19221C),
+                        border: Border.all(
                           color:
-                              _jackpot
-                                  ? const Color(0xFFFFD45C)
-                                  : SwockColors.green,
-                          fontSize: 20,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      )
-                      : const Text(
-                        'Spinning…',
-                        key: ValueKey('spinning'),
-                        style: TextStyle(
-                          color: SwockColors.muted,
-                          fontSize: 15,
+                              complete ? SwockColors.green : SwockColors.line,
                         ),
                       ),
-            ),
-          ],
+                      child: Icon(
+                        complete
+                            ? Icons.check_rounded
+                            : Icons.play_arrow_rounded,
+                        color: complete ? SwockColors.green : SwockColors.muted,
+                        size: 23,
+                      ),
+                    ),
+                  );
+                }),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                '$_watchedAds OF $_requiredAds ADS WATCHED',
+                style: const TextStyle(
+                  color: SwockColors.ink,
+                  fontFamily: 'monospace',
+                  letterSpacing: 1.1,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 10),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: LinearProgressIndicator(
+                  value: _watchedAds / _requiredAds,
+                  minHeight: 6,
+                  backgroundColor: const Color(0xFF202923),
+                  valueColor: const AlwaysStoppedAnimation(SwockColors.green),
+                ),
+              ),
+              if (_message != null) ...[
+                const SizedBox(height: 12),
+                Text(
+                  _message!,
+                  textAlign: TextAlign.center,
+                  style:
+                      const TextStyle(color: SwockColors.muted, fontSize: 12),
+                ),
+              ],
+              const SizedBox(height: 18),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: _busy || _cooldown > 0 ? null : _watchAd,
+                  icon: _busy
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Color(0xFF07120B),
+                          ),
+                        )
+                      : const Icon(Icons.play_circle_outline_rounded),
+                  label: Text(
+                    _busy
+                        ? 'LOADING REWARDED AD…'
+                        : _cooldown > 0
+                            ? 'NEXT AD IN ${_cooldown}s'
+                            : 'WATCH REWARDED AD',
+                  ),
+                ),
+              ),
+              TextButton(
+                onPressed:
+                    _busy ? null : () => Navigator.of(context).pop(false),
+                child: const Text('Cancel'),
+              ),
+            ],
+          ),
         ),
-      ),
-    ),
-  );
-}
-
-class _WheelPainter extends CustomPainter {
-  const _WheelPainter({required this.angle, required this.segments});
-
-  final double angle;
-  final List<TimeReward> segments;
-
-  static Color _fill(TimeReward reward) =>
-      reward.duration >= const Duration(days: 1)
-          ? const Color(0xFF8A6A10)
-          : reward.duration >= const Duration(hours: 1)
-          ? const Color(0xFF0A6F70)
-          : reward.duration >= const Duration(minutes: 15)
-          ? const Color(0xFF0E5A4B)
-          : const Color(0xFF123D2C);
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final center = size.center(Offset.zero);
-    final radius = size.width / 2 - 8;
-    final slice = 2 * math.pi / segments.length;
-    final rect = Rect.fromCircle(center: center, radius: radius);
-
-    canvas.drawCircle(
-      center,
-      radius + 6,
-      Paint()
-        ..color = SwockColors.green.withValues(alpha: .18)
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10),
-    );
-    for (var i = 0; i < segments.length; i++) {
-      final start = -math.pi / 2 + angle + i * slice;
-      canvas.drawArc(
-        rect,
-        start,
-        slice,
-        true,
-        Paint()..color = _fill(segments[i]),
       );
-    }
-    canvas.drawCircle(
-      center,
-      radius,
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 5
-        ..color = SwockColors.green.withValues(alpha: .85),
-    );
-    canvas.drawCircle(center, 22, Paint()..color = const Color(0xFF080B09));
-    canvas.drawCircle(
-      center,
-      22,
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 3
-        ..color = SwockColors.green,
-    );
-    canvas.drawCircle(center, 6, Paint()..color = SwockColors.green);
-  }
-
-  @override
-  bool shouldRepaint(_WheelPainter oldDelegate) => oldDelegate.angle != angle;
 }
 
 /// Asks the user to add time; resolves true to add time, false to disconnect.
@@ -543,77 +529,77 @@ class _TimeUpDialogState extends State<TimeUpDialog> {
 
   @override
   Widget build(BuildContext context) => PopScope(
-    canPop: false,
-    child: Dialog(
-      backgroundColor: const Color(0xFF101713),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: const BorderSide(color: Color(0xFF53403A)),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(24, 26, 24, 20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 60,
-              height: 60,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: SwockColors.red.withValues(alpha: .12),
-                border: Border.all(
-                  color: SwockColors.red.withValues(alpha: .5),
+        canPop: false,
+        child: Dialog(
+          backgroundColor: const Color(0xFF101713),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: const BorderSide(color: Color(0xFF53403A)),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(24, 26, 24, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 60,
+                  height: 60,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: SwockColors.red.withValues(alpha: .12),
+                    border: Border.all(
+                      color: SwockColors.red.withValues(alpha: .5),
+                    ),
+                  ),
+                  child: const Icon(
+                    Icons.timer_off_outlined,
+                    color: SwockColors.red,
+                    size: 30,
+                  ),
                 ),
-              ),
-              child: const Icon(
-                Icons.timer_off_outlined,
-                color: SwockColors.red,
-                size: 30,
-              ),
-            ),
-            const SizedBox(height: 16),
-            const Text(
-              "TIME'S UP",
-              style: TextStyle(
-                color: SwockColors.red,
-                fontFamily: 'monospace',
-                letterSpacing: 2.2,
-                fontSize: 12,
-              ),
-            ),
-            const SizedBox(height: 10),
-            const Text(
-              'Add more VPN time to stay connected.',
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'The VPN disconnects in ${_left}s unless you add time.',
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: SwockColors.muted, height: 1.45),
-            ),
-            const SizedBox(height: 20),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton.icon(
-                onPressed:
-                    _cooldown == 0
+                const SizedBox(height: 16),
+                const Text(
+                  "TIME'S UP",
+                  style: TextStyle(
+                    color: SwockColors.red,
+                    fontFamily: 'monospace',
+                    letterSpacing: 2.2,
+                    fontSize: 12,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                const Text(
+                  'Add more VPN time to stay connected.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'The VPN disconnects in ${_left}s unless you add time.',
+                  textAlign: TextAlign.center,
+                  style:
+                      const TextStyle(color: SwockColors.muted, height: 1.45),
+                ),
+                const SizedBox(height: 20),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: _cooldown == 0
                         ? () => Navigator.of(context).pop(true)
                         : null,
-                icon: const Icon(Icons.add_alarm_rounded),
-                label: Text(
-                  _cooldown == 0 ? 'ADD + TIME' : 'WAIT ${_cooldown}s',
+                    icon: const Icon(Icons.add_alarm_rounded),
+                    label: Text(
+                      _cooldown == 0 ? 'ADD + TIME' : 'WAIT ${_cooldown}s',
+                    ),
+                  ),
                 ),
-              ),
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(false),
+                  child: const Text('Disconnect'),
+                ),
+              ],
             ),
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('Disconnect'),
-            ),
-          ],
+          ),
         ),
-      ),
-    ),
-  );
+      );
 }

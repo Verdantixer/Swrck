@@ -2,38 +2,6 @@ import 'dart:math' as math;
 
 import 'package:shared_preferences/shared_preferences.dart';
 
-class TimeReward {
-  const TimeReward(this.label, this.duration);
-
-  final String label;
-  final Duration duration;
-
-  static const fiveMinutes = TimeReward('5 minutes', Duration(minutes: 5));
-  static const fifteenMinutes = TimeReward('15 minutes', Duration(minutes: 15));
-  static const oneHour = TimeReward('1 hour', Duration(hours: 1));
-  static const oneDay = TimeReward('1 day', Duration(days: 1));
-  static const twentyFourDays = TimeReward('24 days', Duration(days: 24));
-
-  static const wheelSize = 100;
-
-  static TimeReward atWheelIndex(int index) {
-    if (index < 0 || index >= wheelSize) {
-      throw RangeError.range(index, 0, wheelSize - 1, 'index');
-    }
-    if (index < 45) return fiveMinutes;
-    if (index < 78) return fifteenMinutes;
-    if (index < 98) return oneHour;
-    if (index == 98) return oneDay;
-    return twentyFourDays;
-  }
-
-  static int drawWheelIndex([math.Random? random]) =>
-      (random ?? math.Random.secure()).nextInt(wheelSize);
-
-  static TimeReward drawWheelReward([math.Random? random]) =>
-      atWheelIndex(drawWheelIndex(random));
-}
-
 /// VPN time balance that only counts down while the tunnel is connected.
 class TimeBank {
   TimeBank._(

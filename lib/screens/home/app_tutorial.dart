@@ -48,17 +48,17 @@ class _TutorialDialogState extends State<_TutorialDialog> {
     _TutorialStep(
       Icons.hourglass_bottom_rounded,
       'Keep VPN time',
-      'Time counts down only while connected. Tap AD TO SPIN, choose to watch a rewarded video, and the wheel prize is added to your timer.',
+      'Time counts down only while connected. Tap Add Time and complete three rewarded ads to add eight hours to your timer.',
     ),
     _TutorialStep(
       Icons.play_circle_outline_rounded,
-      'Ads stay optional',
-      'A rewarded video can hide ads temporarily. Declining never blocks VPN, Hotshare, or settings. Double-tap the Home status panel to open the offer; it will not play until you choose Watch video.',
+      'Connection ads',
+      'A regular interstitial may appear after the VPN connects; it does not award VPN time. Use Add Time to watch rewarded ads and earn extra VPN time.',
     ),
     _TutorialStep(
       Icons.wifi_tethering_rounded,
       'Share with Hotshare',
-      'Connect the VPN first, then start Hotshare in Settings. Other devices join its Wi-Fi Direct network and use the displayed proxy settings.',
+      'Connect the VPN first, then start Hotshare in Settings. Use proxy mode for manual proxy settings, or enable root direct mode to share without configuring proxies on connected devices.',
     ),
     _TutorialStep(
       Icons.tune_rounded,

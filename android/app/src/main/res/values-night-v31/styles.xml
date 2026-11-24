@@ -4,8 +4,7 @@
         <item name="android:navigationBarColor">@color/swock_navigation</item>
         <item name="android:windowLightNavigationBar">false</item>
         <item name="android:windowSplashScreenBackground">@color/swock_background</item>
-        <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
-        <item name="android:windowSplashScreenIconBackgroundColor">@color/swock_background</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_splash_logo</item>
         <item name="android:windowSplashScreenAnimationDuration">850</item>
         <item name="android:windowBackground">@color/swock_background</item>
     </style>
