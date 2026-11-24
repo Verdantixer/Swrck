@@ -29,31 +29,33 @@ import (
 )
 
 type Profile struct {
-	Name             string          `json:"name"`
-	Server           string          `json:"server"`
-	Port             int             `json:"port"`
-	Protocol         string          `json:"protocol"`
-	Transport        string          `json:"transport"`
-	ServerPublicKey  string          `json:"serverPublicKey"`
-	ClientPrivateKey string          `json:"clientPrivateKey"`
-	TunnelAddress    string          `json:"tunnelAddress"`
-	TLS              tlsProfile      `json:"tls"`
+	Name             string           `json:"name"`
+	Server           string           `json:"server"`
+	Port             int              `json:"port"`
+	Protocol         string           `json:"protocol"`
+	Transport        string           `json:"transport"`
+	ServerPublicKey  string           `json:"serverPublicKey"`
+	ClientPrivateKey string           `json:"clientPrivateKey"`
+	TunnelAddress    string           `json:"tunnelAddress"`
+	TLS              tlsProfile       `json:"tls"`
 	WebSocket        websocketProfile `json:"webSocket"`
-	Advanced         advancedProfile `json:"advanced"`
+	Advanced         advancedProfile  `json:"advanced"`
 }
 
 type tlsProfile struct {
-	Enabled                 bool   `json:"enabled"`
-	SNI                     string `json:"sni"`
-	ServerName              string `json:"serverName"`
-	AllowInsecureCertificate bool  `json:"allowInsecureCertificate"`
+	Enabled                  bool     `json:"enabled"`
+	SNI                      string   `json:"sni"`
+	ServerName               string   `json:"serverName"`
+	AllowInsecureCertificate bool     `json:"allowInsecureCertificate"`
+	ALPN                     []string `json:"alpn"`
 }
 
 type websocketProfile struct {
-	Enabled bool              `json:"enabled"`
-	Path    string            `json:"path"`
-	Host    string            `json:"host"`
-	Headers map[string]string `json:"headers"`
+	Enabled           bool              `json:"enabled"`
+	Path              string            `json:"path"`
+	Host              string            `json:"host"`
+	Headers           map[string]string `json:"headers"`
+	ConnectionOptions map[string]string `json:"connectionOptions"`
 }
 
 type advancedProfile struct {
@@ -172,6 +174,7 @@ func (r *run) stop() {
 		_ = r.conn.Close()
 	}
 	r.mu.Unlock()
+	r.stopProcesses()
 }
 
 func (r *run) readTun(manager *Manager, session packetSession, conn net.Conn, p Profile, key [32]byte, writeMu *sync.Mutex, counter *atomic.Int64) error {
@@ -200,7 +203,9 @@ func (r *run) readTun(manager *Manager, session packetSession, conn net.Conn, p 
 		counter.Add(1)
 		frame, err := encryptFrame(payload, key, nonce)
 		session.ReleaseReceivePacket(packet)
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		writeMu.Lock()
 		_, err = conn.Write(frame)
 		writeMu.Unlock()
@@ -237,7 +242,9 @@ func (r *run) readServer(manager *Manager, session packetSession, conn net.Conn,
 			}
 		}
 		out, err := session.AllocateSendPacket(len(packet))
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		copy(out, packet)
 		session.SendPacket(out)
 		manager.addStats(0, len(packet))

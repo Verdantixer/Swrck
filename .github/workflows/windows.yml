@@ -41,6 +41,7 @@ jobs:
           go mod tidy
           $goFiles = Get-ChildItem internal/tunnel -Filter '*.go' | ForEach-Object FullName
           gofmt -w cmd/swock_core/main_windows.go $goFiles
+          go test ./...
           go build -trimpath -ldflags="-s -w" -o build/swock_core.exe ./cmd/swock_core
 
       - name: Download and verify Wintun
@@ -61,6 +62,72 @@ jobs:
           $license = Get-ChildItem $target -Recurse -File | Where-Object Name -Match '^LICENSE' | Select-Object -First 1
           if ($license) { Copy-Item $license.FullName 'windows/core/build/ThirdParty-Wintun-LICENSE.txt' }
 
+      - name: Download and verify Xray and Sing-box runtimes
+        shell: pwsh
+        run: |
+          $runtimeRoot = 'windows/core/build/runtime'
+          $xrayDir = Join-Path $runtimeRoot 'xray'
+          $singBoxDir = Join-Path $runtimeRoot 'sing-box'
+          New-Item -ItemType Directory -Path $xrayDir, $singBoxDir -Force | Out-Null
+
+          $xrayZip = Join-Path $env:RUNNER_TEMP 'xray-windows-amd64.zip'
+          Invoke-WebRequest -Uri 'https://github.com/XTLS/Xray-core/releases/download/v26.11.9/Xray-windows-64.zip' -OutFile $xrayZip
+          $xrayHash = (Get-FileHash $xrayZip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($xrayHash -ne '1262522266337b824f07beb8e1375786b437683b3890105469088f8e17e0a69d') {
+            throw "Xray archive checksum mismatch: $xrayHash"
+          }
+          $xrayExtract = Join-Path $env:RUNNER_TEMP 'xray-runtime'
+          Expand-Archive -Path $xrayZip -DestinationPath $xrayExtract -Force
+          $xrayExe = Get-ChildItem $xrayExtract -Recurse -File | Where-Object Name -EQ 'xray.exe' | Select-Object -First 1
+          if (-not $xrayExe) { throw 'The verified Xray package did not contain xray.exe.' }
+          Copy-Item (Join-Path $xrayExe.DirectoryName '*') $xrayDir -Recurse -Force
+          Copy-Item 'android/app/libs/LICENSE-Xray-core.txt' (Join-Path $xrayDir 'ThirdParty-Xray-core-LICENSE.txt')
+
+          $singBoxZip = Join-Path $env:RUNNER_TEMP 'sing-box-windows-amd64.zip'
+          Invoke-WebRequest -Uri 'https://github.com/SagerNet/sing-box/releases/download/v1.14.4/sing-box-1.14.4-windows-amd64.zip' -OutFile $singBoxZip
+          $singBoxHash = (Get-FileHash $singBoxZip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($singBoxHash -ne '99185d75d314a07dbba4a130c8ad986cbeb629a07927975636b341ca61f991df') {
+            throw "Sing-box archive checksum mismatch: $singBoxHash"
+          }
+          $singBoxExtract = Join-Path $env:RUNNER_TEMP 'sing-box-runtime'
+          Expand-Archive -Path $singBoxZip -DestinationPath $singBoxExtract -Force
+          $singBoxExe = Get-ChildItem $singBoxExtract -Recurse -File | Where-Object Name -EQ 'sing-box.exe' | Select-Object -First 1
+          if (-not $singBoxExe) { throw 'The verified Sing-box package did not contain sing-box.exe.' }
+          Copy-Item (Join-Path $singBoxExe.DirectoryName '*') $singBoxDir -Recurse -Force
+          Copy-Item 'android/app/libs/LICENSE-libbox.txt' (Join-Path $singBoxDir 'ThirdParty-Sing-box-LICENSE.txt')
+
+          $wintun = 'windows/core/build/wintun.dll'
+          if (-not (Test-Path $wintun)) { throw 'The verified Wintun DLL is missing.' }
+          Copy-Item $wintun (Join-Path $singBoxDir 'wintun.dll') -Force
+          & (Join-Path $xrayDir 'xray.exe') version
+          if ($LASTEXITCODE -ne 0) { throw 'The packaged Xray runtime failed its version check.' }
+          & (Join-Path $singBoxDir 'sing-box.exe') version
+          if ($LASTEXITCODE -ne 0) { throw 'The packaged Sing-box runtime failed its version check.' }
+          $bridgeConfig = @{
+            log = @{ level = 'info' }
+            inbounds = @(@{
+              type = 'tun'
+              tag = 'swock-tun'
+              interface_name = 'Swock VPN'
+              address = @('172.19.0.1/30', 'fdfe:dcba:9876::1/126')
+              auto_route = $false
+              strict_route = $false
+              dns_mode = 'disabled'
+            })
+            outbounds = @(@{
+              type = 'socks'
+              tag = 'xray'
+              server = '127.0.0.1'
+              server_port = 12345
+              version = '5'
+            })
+            route = @{ final = 'xray' }
+          } | ConvertTo-Json -Depth 10
+          $bridgeConfigPath = Join-Path $env:RUNNER_TEMP 'swock-sing-box-check.json'
+          Set-Content -Path $bridgeConfigPath -Value $bridgeConfig -Encoding ascii
+          & (Join-Path $singBoxDir 'sing-box.exe') check -c $bridgeConfigPath
+          if ($LASTEXITCODE -ne 0) { throw 'The generated Windows TUN/SOCKS bridge configuration is invalid.' }
+
       - name: Build Flutter Windows release
         run: flutter build windows --release
 
@@ -72,6 +139,9 @@ jobs:
           if (-not (Test-Path $release)) { throw 'Flutter Windows release output was not found.' }
           Copy-Item 'windows/core/build/swock_core.exe' $release
           Copy-Item 'windows/core/build/wintun.dll' $release
+          $runtimeRelease = Join-Path $release 'runtime'
+          New-Item -ItemType Directory -Path $runtimeRelease -Force | Out-Null
+          Copy-Item 'windows/core/build/runtime/*' $runtimeRelease -Recurse -Force
           if (Test-Path 'windows/core/build/ThirdParty-Wintun-LICENSE.txt') {
             Copy-Item 'windows/core/build/ThirdParty-Wintun-LICENSE.txt' $release
           }

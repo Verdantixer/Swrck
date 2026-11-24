@@ -39,7 +39,7 @@ scripts/build-android.sh split
 - The Android project is configured for the `com.swock.vpn.swock` package namespace.
 - Xray profiles use the bundled Xray-core runtime, native Sing-box JSON profiles use the bundled Sing-box runtime, and SSH profiles use the native SSH full-tunnel implementation.
 - Complete core JSON preserves the protocol features supported by the corresponding bundled core. Xray uses the native tun2socks bridge; Sing-box receives the Android TUN descriptor through libbox.
-- The Windows client currently supports SWK2 profiles over TCP, TLS, WebSocket, and WebSocket TLS. It does not yet support Xray, Sing-box, or SSH profiles.
+- The Windows client supports Xray profiles (including imported Xray JSON), native Sing-box JSON profiles, and legacy SWK2 profiles. SSH profiles are not yet supported on Windows.
 
 ## Build Windows installer
 

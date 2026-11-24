@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,11 +27,12 @@ type Manager struct {
 }
 
 type run struct {
-	ctx    context.Context
-	cancel context.CancelFunc
-	done   chan struct{}
-	mu     sync.Mutex
-	conn   closeable
+	ctx       context.Context
+	cancel    context.CancelFunc
+	done      chan struct{}
+	mu        sync.Mutex
+	conn      closeable
+	processes []*supervisedProcess
 }
 
 type closeable interface{ Close() error }
@@ -56,12 +58,30 @@ func (m *Manager) WatchParent(pid uint32) (<-chan struct{}, error) {
 }
 
 func (m *Manager) Connect(profileJSON json.RawMessage) error {
-	var profile Profile
-	if err := json.Unmarshal(profileJSON, &profile); err != nil {
+	var header struct {
+		Protocol         string `json:"protocol"`
+		ClientPrivateKey string `json:"clientPrivateKey"`
+	}
+	if err := json.Unmarshal(profileJSON, &header); err != nil {
 		return errors.New("Could not read the VPN profile")
 	}
-	if err := profile.Validate(); err != nil {
-		return err
+	isSwockProfile := strings.EqualFold(header.Protocol, "swock") || header.ClientPrivateKey != ""
+	var profile Profile
+	var client clientProfile
+	if isSwockProfile {
+		if err := json.Unmarshal(profileJSON, &profile); err != nil {
+			return errors.New("Could not read the VPN profile")
+		}
+		if err := profile.Validate(); err != nil {
+			return err
+		}
+	} else {
+		if err := json.Unmarshal(profileJSON, &client); err != nil {
+			return errors.New("Could not read the VPN profile")
+		}
+		if err := client.validate(); err != nil {
+			return err
+		}
 	}
 	m.Disconnect()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -75,7 +95,12 @@ func (m *Manager) Connect(profileJSON json.RawMessage) error {
 	m.Log("Starting Windows tunnel")
 	go func() {
 		defer close(active.done)
-		err := active.start(m, profile)
+		var err error
+		if isSwockProfile {
+			err = active.start(m, profile)
+		} else {
+			err = active.startClient(m, client)
+		}
 		active.stop()
 		m.mu.Lock()
 		if m.active == active {

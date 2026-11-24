@@ -33,6 +33,7 @@ type routeState struct {
 	EndpointIP     string `json:"endpointIP"`
 	PhysicalIndex  uint32 `json:"physicalIndex"`
 	NextHop        string `json:"nextHop"`
+	IPv6Enabled    bool   `json:"ipv6Enabled"`
 }
 
 type physicalRoute struct {
@@ -116,11 +117,53 @@ func addTunnelRoutes(index uint32, endpoint net.IP, physical physicalRoute, addr
 	return state, nil
 }
 
+func addClientTunnelRoutes(index uint32, endpoint net.IP, physical physicalRoute, ipv6Enabled bool) (routeState, error) {
+	state := routeState{InterfaceIndex: index, PhysicalIndex: physical.InterfaceIndex, NextHop: physical.NextHop, IPv6Enabled: ipv6Enabled}
+	if endpoint != nil {
+		state.EndpointIP = endpoint.String()
+	}
+	if err := saveRouteState(state); err != nil {
+		return state, fmt.Errorf("could not save VPN cleanup state: %w", err)
+	}
+	if !ipv6Enabled {
+		if err := setIPv6Block(true); err != nil {
+			_ = removeTunnelRoutes(state)
+			return state, fmt.Errorf("could not enable IPv6 leak protection: %w", err)
+		}
+	}
+	for _, prefix := range []string{"0.0.0.0/1", "128.0.0.0/1"} {
+		if err := netsh("interface", "ipv4", "add", "route", "prefix="+prefix, "interface="+fmt.Sprint(index), "nexthop=0.0.0.0", "metric=1", "store=active"); err != nil {
+			_ = removeTunnelRoutes(state)
+			return state, fmt.Errorf("could not add the Windows VPN route %s: %w", prefix, err)
+		}
+	}
+	if ipv6Enabled {
+		if err := setIPv6Block(false); err != nil {
+			_ = removeTunnelRoutes(state)
+			return state, fmt.Errorf("could not clear IPv6 leak protection: %w", err)
+		}
+		for _, prefix := range []string{"::/1", "8000::/1"} {
+			if err := netsh("interface", "ipv6", "add", "route", "prefix="+prefix, "interface="+fmt.Sprint(index), "nexthop=::", "metric=1", "store=active"); err != nil {
+				_ = removeTunnelRoutes(state)
+				return state, fmt.Errorf("could not add the Windows VPN route %s: %w", prefix, err)
+			}
+		}
+	}
+	return state, nil
+}
+
 func removeTunnelRoutes(state routeState) error {
 	var errs []string
 	for _, prefix := range []string{"0.0.0.0/1", "128.0.0.0/1"} {
 		if err := netsh("interface", "ipv4", "delete", "route", "prefix="+prefix, "interface="+fmt.Sprint(state.InterfaceIndex), "nexthop=0.0.0.0", "store=active"); err != nil {
 			errs = append(errs, err.Error())
+		}
+	}
+	if state.IPv6Enabled {
+		for _, prefix := range []string{"::/1", "8000::/1"} {
+			if err := netsh("interface", "ipv6", "delete", "route", "prefix="+prefix, "interface="+fmt.Sprint(state.InterfaceIndex), "nexthop=::", "store=active"); err != nil {
+				errs = append(errs, err.Error())
+			}
 		}
 	}
 	if state.EndpointIP != "" && state.PhysicalIndex != 0 {
@@ -149,14 +192,21 @@ func Cleanup(removeAdapter bool) error {
 			_ = netsh("interface", "ipv4", "delete", "route", "prefix=0.0.0.0/1", "interface="+fmt.Sprint(index), "nexthop=0.0.0.0", "store=active")
 			_ = netsh("interface", "ipv4", "delete", "route", "prefix=128.0.0.0/1", "interface="+fmt.Sprint(index), "nexthop=0.0.0.0", "store=active")
 		}
+		if state.EndpointIP != "" && state.PhysicalIndex != 0 {
+			if endpoint := net.ParseIP(state.EndpointIP); endpoint != nil {
+				_ = removeEndpointRoute(endpoint, physicalRoute{InterfaceIndex: state.PhysicalIndex, NextHop: state.NextHop})
+			}
+		}
 		_ = setIPv6Block(false)
 	}
+	_ = os.Remove(routeStatePath())
 	// Remove an orphaned Swock adapter after unclean shutdowns. It is safe to
 	// do this on service startup too: the control pipe lock guarantees there is
 	// no other Swock core process using this adapter.
 	// Only remove a device on uninstall or when persisted Swock route state
 	// proves an unclean VPN session may have left it behind.
-	if removeAdapter || state.InterfaceIndex != 0 {
+	_, adapterErr := interfaceIndex(adapterName)
+	if removeAdapter || state.InterfaceIndex != 0 || state.EndpointIP != "" || adapterErr == nil {
 		_, _ = powershell(`Get-PnpDevice -Class Net -ErrorAction SilentlyContinue | Where-Object { $_.FriendlyName -eq 'Swock VPN' } | ForEach-Object { pnputil.exe /remove-device $_.InstanceId | Out-Null }`)
 	}
 	return nil
